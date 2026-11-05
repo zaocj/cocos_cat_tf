@@ -1,0 +1,433 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-05T09:34:07.163703+00:00",
+  "title": "Design System: 萌宠变异录 · 无素材 MVP",
+  "extensions": {
+    "colorMeta": {
+      "forest-action": {
+        "role": "primary",
+        "displayName": "森林操作绿",
+        "canonical": "#337354",
+        "tonalRamp": [
+          "oklch(15.0% 0.0277 160.2)",
+          "oklch(27.0% 0.0610 160.2)",
+          "oklch(38.0% 0.0832 160.2)",
+          "oklch(50.0% 0.0832 160.2)",
+          "oklch(61.0% 0.0832 160.2)",
+          "oklch(73.0% 0.0832 160.2)",
+          "oklch(84.0% 0.0605 160.2)",
+          "oklch(95.0% 0.0189 160.2)"
+        ]
+      },
+      "forest-ink": {
+        "role": "neutral",
+        "displayName": "深林墨",
+        "canonical": "#234235",
+        "tonalRamp": [
+          "oklch(15.0% 0.0146 165.2)",
+          "oklch(27.0% 0.0322 165.2)",
+          "oklch(38.0% 0.0438 165.2)",
+          "oklch(50.0% 0.0438 165.2)",
+          "oklch(61.0% 0.0438 165.2)",
+          "oklch(73.0% 0.0438 165.2)",
+          "oklch(84.0% 0.0319 165.2)",
+          "oklch(95.0% 0.0100 165.2)"
+        ]
+      },
+      "forest-muted": {
+        "role": "neutral",
+        "displayName": "灰绿文字",
+        "canonical": "#526A58",
+        "tonalRamp": [
+          "oklch(15.0% 0.0134 152.4)",
+          "oklch(27.0% 0.0296 152.4)",
+          "oklch(38.0% 0.0403 152.4)",
+          "oklch(50.0% 0.0403 152.4)",
+          "oklch(61.0% 0.0403 152.4)",
+          "oklch(73.0% 0.0403 152.4)",
+          "oklch(84.0% 0.0293 152.4)",
+          "oklch(95.0% 0.0092 152.4)"
+        ]
+      },
+      "forest-canvas": {
+        "role": "neutral",
+        "displayName": "林地纸底",
+        "canonical": "#EDF3E7",
+        "tonalRamp": [
+          "oklch(15.0% 0.0057 128.7)",
+          "oklch(27.0% 0.0125 128.7)",
+          "oklch(38.0% 0.0171 128.7)",
+          "oklch(50.0% 0.0171 128.7)",
+          "oklch(61.0% 0.0171 128.7)",
+          "oklch(73.0% 0.0171 128.7)",
+          "oklch(84.0% 0.0124 128.7)",
+          "oklch(95.0% 0.0039 128.7)"
+        ]
+      },
+      "forest-board": {
+        "role": "neutral",
+        "displayName": "棋盘浅绿",
+        "canonical": "#DDE9D3",
+        "tonalRamp": [
+          "oklch(15.0% 0.0107 130.6)",
+          "oklch(27.0% 0.0235 130.6)",
+          "oklch(38.0% 0.0320 130.6)",
+          "oklch(50.0% 0.0320 130.6)",
+          "oklch(61.0% 0.0320 130.6)",
+          "oklch(73.0% 0.0320 130.6)",
+          "oklch(84.0% 0.0233 130.6)",
+          "oklch(95.0% 0.0073 130.6)"
+        ]
+      },
+      "forest-pale": {
+        "role": "neutral",
+        "displayName": "淡绿",
+        "canonical": "#D9E6D0",
+        "tonalRamp": [
+          "oklch(15.0% 0.0108 132.3)",
+          "oklch(27.0% 0.0239 132.3)",
+          "oklch(38.0% 0.0325 132.3)",
+          "oklch(50.0% 0.0325 132.3)",
+          "oklch(61.0% 0.0325 132.3)",
+          "oklch(73.0% 0.0325 132.3)",
+          "oklch(84.0% 0.0237 132.3)",
+          "oklch(95.0% 0.0074 132.3)"
+        ]
+      },
+      "warm-white": {
+        "role": "neutral",
+        "displayName": "暖白",
+        "canonical": "#FCFDF7",
+        "tonalRamp": [
+          "oklch(15.0% 0.0026 114.2)",
+          "oklch(27.0% 0.0058 114.2)",
+          "oklch(38.0% 0.0079 114.2)",
+          "oklch(50.0% 0.0079 114.2)",
+          "oklch(61.0% 0.0079 114.2)",
+          "oklch(73.0% 0.0079 114.2)",
+          "oklch(84.0% 0.0058 114.2)",
+          "oklch(95.0% 0.0018 114.2)"
+        ]
+      },
+      "forest-line": {
+        "role": "neutral",
+        "displayName": "连线绿",
+        "canonical": "#A5B89C",
+        "tonalRamp": [
+          "oklch(15.0% 0.0148 135.5)",
+          "oklch(27.0% 0.0326 135.5)",
+          "oklch(38.0% 0.0444 135.5)",
+          "oklch(50.0% 0.0444 135.5)",
+          "oklch(61.0% 0.0444 135.5)",
+          "oklch(73.0% 0.0444 135.5)",
+          "oklch(84.0% 0.0323 135.5)",
+          "oklch(95.0% 0.0101 135.5)"
+        ]
+      },
+      "path-edge": {
+        "role": "neutral",
+        "displayName": "路缘绿",
+        "canonical": "#B9C8A8",
+        "tonalRamp": [
+          "oklch(15.0% 0.0156 127.9)",
+          "oklch(27.0% 0.0343 127.9)",
+          "oklch(38.0% 0.0468 127.9)",
+          "oklch(50.0% 0.0468 127.9)",
+          "oklch(61.0% 0.0468 127.9)",
+          "oklch(73.0% 0.0468 127.9)",
+          "oklch(84.0% 0.0340 127.9)",
+          "oklch(95.0% 0.0106 127.9)"
+        ]
+      },
+      "path-sand": {
+        "role": "neutral",
+        "displayName": "沙色路",
+        "canonical": "#F5EED9",
+        "tonalRamp": [
+          "oklch(15.0% 0.0096 91.6)",
+          "oklch(27.0% 0.0211 91.6)",
+          "oklch(38.0% 0.0287 91.6)",
+          "oklch(50.0% 0.0287 91.6)",
+          "oklch(61.0% 0.0287 91.6)",
+          "oklch(73.0% 0.0287 91.6)",
+          "oklch(84.0% 0.0209 91.6)",
+          "oklch(95.0% 0.0065 91.6)"
+        ]
+      },
+      "cat-accent": {
+        "role": "secondary",
+        "displayName": "猫爪橙",
+        "canonical": "#B85C20",
+        "tonalRamp": [
+          "oklch(15.0% 0.0459 49.2)",
+          "oklch(27.0% 0.1011 49.2)",
+          "oklch(38.0% 0.1378 49.2)",
+          "oklch(50.0% 0.1378 49.2)",
+          "oklch(61.0% 0.1378 49.2)",
+          "oklch(73.0% 0.1378 49.2)",
+          "oklch(84.0% 0.1002 49.2)",
+          "oklch(95.0% 0.0313 49.2)"
+        ]
+      },
+      "cat-fur": {
+        "role": "secondary",
+        "displayName": "暖橙毛色",
+        "canonical": "#F1AF64",
+        "tonalRamp": [
+          "oklch(15.0% 0.0400 68.2)",
+          "oklch(27.0% 0.0881 68.2)",
+          "oklch(38.0% 0.1201 68.2)",
+          "oklch(50.0% 0.1201 68.2)",
+          "oklch(61.0% 0.1201 68.2)",
+          "oklch(73.0% 0.1201 68.2)",
+          "oklch(84.0% 0.0874 68.2)",
+          "oklch(95.0% 0.0273 68.2)"
+        ]
+      },
+      "rabbit-accent": {
+        "role": "secondary",
+        "displayName": "星弹蓝",
+        "canonical": "#286A9C",
+        "tonalRamp": [
+          "oklch(15.0% 0.0345 245.0)",
+          "oklch(27.0% 0.0759 245.0)",
+          "oklch(38.0% 0.1035 245.0)",
+          "oklch(50.0% 0.1035 245.0)",
+          "oklch(61.0% 0.1035 245.0)",
+          "oklch(73.0% 0.1035 245.0)",
+          "oklch(84.0% 0.0752 245.0)",
+          "oklch(95.0% 0.0235 245.0)"
+        ]
+      },
+      "rabbit-fur": {
+        "role": "secondary",
+        "displayName": "浅蓝毛色",
+        "canonical": "#96CBE3",
+        "tonalRamp": [
+          "oklch(15.0% 0.0215 227.7)",
+          "oklch(27.0% 0.0473 227.7)",
+          "oklch(38.0% 0.0645 227.7)",
+          "oklch(50.0% 0.0645 227.7)",
+          "oklch(61.0% 0.0645 227.7)",
+          "oklch(73.0% 0.0645 227.7)",
+          "oklch(84.0% 0.0469 227.7)",
+          "oklch(95.0% 0.0147 227.7)"
+        ]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "受伤红",
+        "canonical": "#A64243",
+        "tonalRamp": [
+          "oklch(15.0% 0.0442 22.4)",
+          "oklch(27.0% 0.0972 22.4)",
+          "oklch(38.0% 0.1326 22.4)",
+          "oklch(50.0% 0.1326 22.4)",
+          "oklch(61.0% 0.1326 22.4)",
+          "oklch(73.0% 0.1326 22.4)",
+          "oklch(84.0% 0.0964 22.4)",
+          "oklch(95.0% 0.0301 22.4)"
+        ]
+      },
+      "mist-body": {
+        "role": "tertiary",
+        "displayName": "雾团紫",
+        "canonical": "#A46D9F",
+        "tonalRamp": [
+          "oklch(15.0% 0.0325 329.9)",
+          "oklch(27.0% 0.0716 329.9)",
+          "oklch(38.0% 0.0976 329.9)",
+          "oklch(50.0% 0.0976 329.9)",
+          "oklch(61.0% 0.0976 329.9)",
+          "oklch(73.0% 0.0976 329.9)",
+          "oklch(84.0% 0.0710 329.9)",
+          "oklch(95.0% 0.0222 329.9)"
+        ]
+      },
+      "mist-face": {
+        "role": "tertiary",
+        "displayName": "深紫表情",
+        "canonical": "#6F4A72",
+        "tonalRamp": [
+          "oklch(15.0% 0.0259 324.1)",
+          "oklch(27.0% 0.0569 324.1)",
+          "oklch(38.0% 0.0776 324.1)",
+          "oklch(50.0% 0.0776 324.1)",
+          "oklch(61.0% 0.0776 324.1)",
+          "oklch(73.0% 0.0776 324.1)",
+          "oklch(84.0% 0.0564 324.1)",
+          "oklch(95.0% 0.0176 324.1)"
+        ]
+      },
+      "pet-card-idle": {
+        "role": "neutral",
+        "displayName": "闲置卡灰绿",
+        "canonical": "#F0F3E9",
+        "tonalRamp": [
+          "oklch(15.0% 0.0045 120.3)",
+          "oklch(27.0% 0.0100 120.3)",
+          "oklch(38.0% 0.0136 120.3)",
+          "oklch(50.0% 0.0136 120.3)",
+          "oklch(61.0% 0.0136 120.3)",
+          "oklch(73.0% 0.0136 120.3)",
+          "oklch(84.0% 0.0099 120.3)",
+          "oklch(95.0% 0.0031 120.3)"
+        ]
+      },
+      "cat-card-selected": {
+        "role": "secondary",
+        "displayName": "猫选中浅橙",
+        "canonical": "#F8E5CD",
+        "tonalRamp": [
+          "oklch(15.0% 0.0127 73.7)",
+          "oklch(27.0% 0.0278 73.7)",
+          "oklch(38.0% 0.0380 73.7)",
+          "oklch(50.0% 0.0380 73.7)",
+          "oklch(61.0% 0.0380 73.7)",
+          "oklch(73.0% 0.0380 73.7)",
+          "oklch(84.0% 0.0276 73.7)",
+          "oklch(95.0% 0.0086 73.7)"
+        ]
+      },
+      "rabbit-card-selected": {
+        "role": "secondary",
+        "displayName": "兔选中浅蓝",
+        "canonical": "#DFEFF5",
+        "tonalRamp": [
+          "oklch(15.0% 0.0063 222.2)",
+          "oklch(27.0% 0.0138 222.2)",
+          "oklch(38.0% 0.0188 222.2)",
+          "oklch(50.0% 0.0188 222.2)",
+          "oklch(61.0% 0.0188 222.2)",
+          "oklch(73.0% 0.0188 222.2)",
+          "oklch(84.0% 0.0137 222.2)",
+          "oklch(95.0% 0.0043 222.2)"
+        ]
+      },
+      "route-locked": {
+        "role": "neutral",
+        "displayName": "锁定路线灰绿",
+        "canonical": "#C6D4BD",
+        "tonalRamp": [
+          "oklch(15.0% 0.0116 133.0)",
+          "oklch(27.0% 0.0255 133.0)",
+          "oklch(38.0% 0.0347 133.0)",
+          "oklch(50.0% 0.0347 133.0)",
+          "oklch(61.0% 0.0347 133.0)",
+          "oklch(73.0% 0.0347 133.0)",
+          "oklch(84.0% 0.0253 133.0)",
+          "oklch(95.0% 0.0079 133.0)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "display",
+        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+      },
+      "headline": {
+        "displayName": "headline",
+        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+      },
+      "title": {
+        "displayName": "title",
+        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+      },
+      "body": {
+        "displayName": "body",
+        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+      },
+      "label": {
+        "displayName": "label",
+        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+      },
+      "caption": {
+        "displayName": "caption",
+        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "button-hover-scale",
+        "value": "scale(1.025), immediate",
+        "purpose": "通用按钮鼠标进入 / 离开时立即缩放 / 恢复；无补间。"
+      }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "开始防守",
+      "kind": "button",
+      "description": "Cocos 200 × 50 按钮的独立面板预览；hover 即时放大，无动画。",
+      "html": "<button class=\"ds-primary\">开始防守</button>",
+      "css": ".ds-primary{width:200px;height:50px;border:0;border-radius:12px;background:#337354;color:#FCFDF7;font:700 18px/1.45 sans-serif;cursor:pointer}.ds-primary:hover{transform:scale(1.025)}",
+      "refersTo": "button-primary"
+    },
+    {
+      "name": "倍速按钮",
+      "kind": "button",
+      "description": "Cocos 次要按钮；点击由游戏在 1 与 2 倍速间切换。",
+      "html": "<button class=\"ds-secondary\">1 倍速</button>",
+      "css": ".ds-secondary{width:92px;height:48px;border:0;border-radius:12px;background:#D9E6D0;color:#234235;font:700 18px/1.45 sans-serif;cursor:pointer}.ds-secondary:hover{transform:scale(1.025)}",
+      "refersTo": "button-secondary"
+    },
+    {
+      "name": "爪爪猫选中卡",
+      "kind": "card",
+      "description": "选中准备态的文字、角色色背景和 2 单位描边；预览只展示卡片，不替代 Graphics 角色。",
+      "html": "<div class=\"ds-cat-card\"><strong>爪爪猫</strong><span>近战 · 24 伤害</span><small>已放置 · 树桩 1 / 已选中</small></div>",
+      "css": ".ds-cat-card{width:214px;height:118px;border:2px solid #B85C20;border-radius:12px;background:#F8E5CD;position:relative;text-align:center;font-family:sans-serif;color:#234235}.ds-cat-card strong{position:absolute;top:11px;left:70px;width:135px;font-size:19px;line-height:1.45;color:#B85C20}.ds-cat-card span{position:absolute;top:43px;left:70px;width:135px;font-size:15px;line-height:1.45;color:#526A58}.ds-cat-card small{position:absolute;bottom:8px;left:4px;width:205px;font-size:14px;line-height:1.45}",
+      "refersTo": "pet-card"
+    },
+    {
+      "name": "星弹兔选中卡",
+      "kind": "card",
+      "description": "选中准备态的文字、角色色背景和 2 单位描边；预览只展示卡片，不替代 Graphics 角色。",
+      "html": "<div class=\"ds-rabbit-card\"><strong>星弹兔</strong><span>远程 · 12 伤害</span><small>已放置 · 树桩 1 / 已选中</small></div>",
+      "css": ".ds-rabbit-card{width:214px;height:118px;border:2px solid #286A9C;border-radius:12px;background:#DFEFF5;position:relative;text-align:center;font-family:sans-serif;color:#234235}.ds-rabbit-card strong{position:absolute;top:11px;left:70px;width:135px;font-size:19px;line-height:1.45;color:#286A9C}.ds-rabbit-card span{position:absolute;top:43px;left:70px;width:135px;font-size:15px;line-height:1.45;color:#526A58}.ds-rabbit-card small{position:absolute;bottom:8px;left:4px;width:205px;font-size:14px;line-height:1.45}",
+      "refersTo": "pet-card"
+    },
+    {
+      "name": "可选路线节点",
+      "kind": "nav",
+      "description": "半径 40 的可用节点，暖白填充与 3 单位绿色描边；中文标注状态。",
+      "html": "<div class=\"ds-route\"><svg width=\"84\" height=\"84\" viewBox=\"0 0 84 84\" aria-hidden=\"true\"><circle cx=\"42\" cy=\"42\" r=\"40\" fill=\"#FCFDF7\" stroke=\"#337354\" stroke-width=\"3\"/><circle cx=\"42\" cy=\"42\" r=\"13\" fill=\"#337354\"/><path d=\"M23 26L61 58\" stroke=\"#337354\" stroke-width=\"3\"/></svg><strong>绒芽小径</strong><small>6 只雾团 · 行进缓慢</small></div>",
+      "css": ".ds-route{display:flex;align-items:center;flex-direction:column;gap:6px;width:225px;font-family:sans-serif;color:#234235}.ds-route strong{font-size:19px;line-height:1.45}.ds-route small{font-size:14px;line-height:1.45;color:#526A58}"
+    },
+    {
+      "name": "结算面板",
+      "kind": "custom",
+      "description": "尺寸 560 × 310；实际游戏叠加深林墨 alpha 145 / 255 的全屏遮罩。",
+      "html": "<div class=\"ds-result\"><strong>这一站，守住了。</strong><p>击退雾团，两位伙伴可以继续出发。</p><button>继续选择路线</button></div>",
+      "css": ".ds-result{width:560px;height:310px;border-radius:20px;background:#FCFDF7;position:relative;text-align:center;font-family:sans-serif}.ds-result strong{position:absolute;top:42px;left:30px;width:500px;font-size:34px;line-height:1.45;color:#337354}.ds-result p{position:absolute;top:118px;left:35px;width:490px;margin:0;font-size:19px;line-height:1.45;color:#526A58}.ds-result button{position:absolute;left:120px;bottom:35px;width:320px;height:52px;border:0;border-radius:12px;background:#337354;color:#FCFDF7;font:700 18px/1.45 sans-serif}.ds-result button:hover{transform:scale(1.025)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "浅色森林棋盘",
+    "overview": "浅绿棋盘承载路线、道路、树桩与伙伴。深绿文字保持清楚的层级，橙猫与蓝兔用颜色和轮廓共同区分近战、远程；这是用户确认的视觉方向。\n\n本规范记录 Cocos Creator 3.8.8 的 `Graphics` / `Label` 实现。所有角色与界面均程序绘制，优先支持选择、放置和防守；以下尺寸均为 1280 × 720 设计坐标中的单位，前置 token 的 `px` 是交换格式表达，并非 CSS 实现。依据为 `assets/scripts/presentation/MvpGame.ts` 与 `.impeccable/review/` 的四张实际 Web 构建截图。",
+    "keyCharacteristics": [
+      "浅绿底、沙色道路、深绿信息与主要操作。",
+      "圆角容器、圆形树桩及几何角色，不依赖外部美术素材。",
+      "颜色、描边和中文状态文案共同说明可用与选中状态。"
+    ],
+    "rules": [
+      {
+        "name": "The Color-and-Words Rule",
+        "body": "选中同时显示角色色描边和“已选中”；路线同时用形状、连线和“沿连线解锁 / 已守住”文案说明状态。",
+        "section": "colors"
+      }
+    ],
+    "dos": [
+      "Do 保持浅色森林棋盘、橙猫、蓝兔与程序绘制方向。",
+      "Do 让选择、部署、锁定和完成状态同时有可见图形差异与中文文案。",
+      "Do 以 1280 × 720 设计坐标核对整体缩放后的文字、树桩与操作栏。"
+    ],
+    "donts": [
+      "Don't 把颜色当作近远程或交互状态的唯一线索。",
+      "Don't 将文档 token 当作游戏中已存在的 CSS 变量或外部字体依赖。",
+      "Don't 将当前等比缩放描述为已完成手机竖屏重排或键盘焦点系统。"
+    ]
+  }
+}

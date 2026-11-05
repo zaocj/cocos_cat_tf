@@ -1,0 +1,18 @@
+{
+  "name": "NewProject",
+  "uuid": "6a49cb8e-6ea3-486b-ac54-cd3ea8335ed1",
+  "creator": {
+    "version": "3.8.8"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.0",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "build:mvp": "node tools/build-mvp.mjs",
+    "serve": "python3 -m http.server 8090 --bind 127.0.0.1 --directory build/web-mobile"
+  }
+}
