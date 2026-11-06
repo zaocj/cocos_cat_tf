@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, mkdir, open, readFile } from 'node:fs/promises';
+import { access, mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -11,7 +11,12 @@ const sceneMeta = JSON.parse(await readFile(path.join(root, 'assets/Boot.scene.m
 await mkdir(path.join(root, '.mvp'), { recursive: true });
 const logPath = path.join(root, '.mvp/build.log');
 const log = await open(logPath, 'w');
-const options = `platform=web-mobile;debug=true;name=萌宠变异录;startScene=${sceneMeta.uuid}`;
+const configPath = path.join(root, '.mvp/build-config.json');
+await writeFile(configPath, JSON.stringify({
+    platform: 'web-mobile', debug: true, md5Cache: true, name: '萌宠变异录', startScene: sceneMeta.uuid,
+    packages: { 'web-mobile': { orientation: 'portrait' } },
+}, null, 2));
+const options = `configPath=${configPath}`;
 console.log('正在使用 Cocos Creator 构建 Web MVP，完整日志：' + logPath);
 const child = spawn(editor, ['--project', root, '--build', options], { stdio: ['ignore', log.fd, log.fd] });
 child.on('error', async error => { await log.close(); console.error(error.message); process.exitCode = 1; });

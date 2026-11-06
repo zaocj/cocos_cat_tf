@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-05T09:34:07.163703+00:00",
+  "generatedAt": "2026-11-05T16:14:29.774218+00:00",
   "title": "Design System: 萌宠变异录 · 无素材 MVP",
   "extensions": {
     "colorMeta": {
@@ -318,32 +318,52 @@
           "oklch(84.0% 0.0253 133.0)",
           "oklch(95.0% 0.0079 133.0)"
         ]
+      },
+      "deer-fur": {
+        "role": "accent",
+        "displayName": "铃芽鹿毛色",
+        "canonical": "#C9AD77"
+      },
+      "deer-accent": {
+        "role": "accent",
+        "displayName": "鹿光环绿",
+        "canonical": "#4D8251"
+      },
+      "mushroom-fur": {
+        "role": "accent",
+        "displayName": "茸茸菇身体",
+        "canonical": "#CE9DD1"
+      },
+      "mushroom-accent": {
+        "role": "accent",
+        "displayName": "菌盖孢子紫",
+        "canonical": "#87539D"
       }
     },
     "typographyMeta": {
       "display": {
         "displayName": "display",
-        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+        "purpose": "720 × 1280 竖屏基准中的 Label 层级；长屏扩展战场，统一使用系统 sans-serif。"
       },
       "headline": {
         "displayName": "headline",
-        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+        "purpose": "720 × 1280 竖屏基准中的 Label 层级；长屏扩展战场，统一使用系统 sans-serif。"
       },
       "title": {
         "displayName": "title",
-        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+        "purpose": "720 × 1280 竖屏基准中的 Label 层级；长屏扩展战场，统一使用系统 sans-serif。"
       },
       "body": {
         "displayName": "body",
-        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+        "purpose": "720 × 1280 竖屏基准中的 Label 层级；长屏扩展战场，统一使用系统 sans-serif。"
       },
       "label": {
         "displayName": "label",
-        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+        "purpose": "720 × 1280 竖屏基准中的 Label 层级；长屏扩展战场，统一使用系统 sans-serif。"
       },
       "caption": {
         "displayName": "caption",
-        "purpose": "1280 × 720 设计坐标中的 Label 层级；系统 sans-serif，统一 1.45 行高。"
+        "purpose": "720 × 1280 竖屏基准中的 Label 层级；长屏扩展战场，统一使用系统 sans-serif。"
       }
     },
     "shadows": [],
@@ -354,63 +374,72 @@
         "purpose": "通用按钮鼠标进入 / 离开时立即缩放 / 恢复；无补间。"
       }
     ],
-    "breakpoints": []
+    "breakpoints": {
+      "portrait": "height > width；720 × 1280 基准，长屏固定宽度，短屏等比留边。",
+      "blocked": "横屏与正方形只显示竖屏提示，并冻结战斗。"
+    }
   },
   "components": [
     {
       "name": "开始防守",
       "kind": "button",
-      "description": "Cocos 200 × 50 按钮的独立面板预览；hover 即时放大，无动画。",
-      "html": "<button class=\"ds-primary\">开始防守</button>",
-      "css": ".ds-primary{width:200px;height:50px;border:0;border-radius:12px;background:#337354;color:#FCFDF7;font:700 18px/1.45 sans-serif;cursor:pointer}.ds-primary:hover{transform:scale(1.025)}",
+      "description": "竖屏战前主按钮，420 × 84 设计单位。",
+      "html": "<button class=\"primary\">开始防守</button>",
+      "css": ".primary{width:420px;height:84px;border:0;border-radius:12px;background:#337354;color:#FCFDF7;font:700 26px sans-serif}",
       "refersTo": "button-primary"
     },
     {
-      "name": "倍速按钮",
+      "name": "暂停控制",
       "kind": "button",
-      "description": "Cocos 次要按钮；点击由游戏在 1 与 2 倍速间切换。",
-      "html": "<button class=\"ds-secondary\">1 倍速</button>",
-      "css": ".ds-secondary{width:92px;height:48px;border:0;border-radius:12px;background:#D9E6D0;color:#234235;font:700 18px/1.45 sans-serif;cursor:pointer}.ds-secondary:hover{transform:scale(1.025)}",
+      "description": "底部战斗控制，200 × 84。",
+      "html": "<button class=\"secondary\">暂停</button>",
+      "css": ".secondary{width:200px;height:84px;border:0;border-radius:12px;background:#D9E6D0;color:#234235;font:700 26px sans-serif}",
       "refersTo": "button-secondary"
     },
     {
-      "name": "爪爪猫选中卡",
+      "name": "四宠头像栏",
       "kind": "card",
-      "description": "选中准备态的文字、角色色背景和 2 单位描边；预览只展示卡片，不替代 Graphics 角色。",
-      "html": "<div class=\"ds-cat-card\"><strong>爪爪猫</strong><span>近战 · 24 伤害</span><small>已放置 · 树桩 1 / 已选中</small></div>",
-      "css": ".ds-cat-card{width:214px;height:118px;border:2px solid #B85C20;border-radius:12px;background:#F8E5CD;position:relative;text-align:center;font-family:sans-serif;color:#234235}.ds-cat-card strong{position:absolute;top:11px;left:70px;width:135px;font-size:19px;line-height:1.45;color:#B85C20}.ds-cat-card span{position:absolute;top:43px;left:70px;width:135px;font-size:15px;line-height:1.45;color:#526A58}.ds-cat-card small{position:absolute;bottom:8px;left:4px;width:205px;font-size:14px;line-height:1.45}",
+      "description": "底部四个 120 × 106 纯头像，选中描边；名称、价格、数据在顶部卡片。",
+      "html": "<div class=\"avatars\"><i title=\"爪爪猫\"></i><i title=\"星弹兔\"></i><i title=\"铃芽鹿\"></i><i title=\"茸茸菇\"></i></div>",
+      "css": ".avatars{display:flex;gap:40px;padding:12px;background:#EDF3E7}.avatars i{box-sizing:border-box;width:120px;height:106px;border-radius:22px;background:radial-gradient(circle,#F1AF64 34%,#FCFDF7 35%);border:3px solid #B85C20}.avatars i:nth-child(2){background:radial-gradient(circle,#96CBE3 34%,#FCFDF7 35%);border-color:transparent}.avatars i:nth-child(3){background:radial-gradient(circle,#C9AD77 34%,#FCFDF7 35%);border-color:transparent}.avatars i:nth-child(4){background:radial-gradient(circle,#CE9DD1 34%,#FCFDF7 35%);border-color:transparent}",
       "refersTo": "pet-card"
     },
     {
-      "name": "星弹兔选中卡",
+      "name": "后备伙伴",
+      "kind": "button",
+      "description": "弹窗内 3 列 4 行，单格 188 × 86。",
+      "html": "<button class=\"reserve\">爪爪猫 #1<br>免费部署</button>",
+      "css": ".reserve{width:188px;height:86px;border:0;border-radius:12px;background:#D9E6D0;color:#234235;font:26px/1.45 sans-serif}"
+    },
+    {
+      "name": "战斗结算",
       "kind": "card",
-      "description": "选中准备态的文字、角色色背景和 2 单位描边；预览只展示卡片，不替代 Graphics 角色。",
-      "html": "<div class=\"ds-rabbit-card\"><strong>星弹兔</strong><span>远程 · 12 伤害</span><small>已放置 · 树桩 1 / 已选中</small></div>",
-      "css": ".ds-rabbit-card{width:214px;height:118px;border:2px solid #286A9C;border-radius:12px;background:#DFEFF5;position:relative;text-align:center;font-family:sans-serif;color:#234235}.ds-rabbit-card strong{position:absolute;top:11px;left:70px;width:135px;font-size:19px;line-height:1.45;color:#286A9C}.ds-rabbit-card span{position:absolute;top:43px;left:70px;width:135px;font-size:15px;line-height:1.45;color:#526A58}.ds-rabbit-card small{position:absolute;bottom:8px;left:4px;width:205px;font-size:14px;line-height:1.45}",
-      "refersTo": "pet-card"
+      "description": "640 × 440，遮罩拦截战场输入。",
+      "html": "<div class=\"result\"><strong>这一站，守住了。</strong><p>带着萌宠小队，继续出发。</p><button>继续选择路线</button></div>",
+      "css": ".result{box-sizing:border-box;width:640px;height:440px;border-radius:20px;background:#FCFDF7;color:#234235;display:flex;flex-direction:column;align-items:center;justify-content:space-evenly;font:26px sans-serif}.result strong{font-size:36px}.result button{width:560px;height:84px;border:0;border-radius:12px;background:#337354;color:#FCFDF7;font:700 26px sans-serif}"
     },
     {
-      "name": "可选路线节点",
-      "kind": "nav",
-      "description": "半径 40 的可用节点，暖白填充与 3 单位绿色描边；中文标注状态。",
-      "html": "<div class=\"ds-route\"><svg width=\"84\" height=\"84\" viewBox=\"0 0 84 84\" aria-hidden=\"true\"><circle cx=\"42\" cy=\"42\" r=\"40\" fill=\"#FCFDF7\" stroke=\"#337354\" stroke-width=\"3\"/><circle cx=\"42\" cy=\"42\" r=\"13\" fill=\"#337354\"/><path d=\"M23 26L61 58\" stroke=\"#337354\" stroke-width=\"3\"/></svg><strong>绒芽小径</strong><small>6 只雾团 · 行进缓慢</small></div>",
-      "css": ".ds-route{display:flex;align-items:center;flex-direction:column;gap:6px;width:225px;font-family:sans-serif;color:#234235}.ds-route strong{font-size:19px;line-height:1.45}.ds-route small{font-size:14px;line-height:1.45;color:#526A58}"
+      "name": "竖屏提示",
+      "kind": "card",
+      "description": "横屏只呈现提示，冻结战斗，回竖屏恢复方向造成的暂停。",
+      "html": "<div class=\"gate\"><strong>请竖屏游玩</strong><p>本游戏仅支持竖屏。</p></div>",
+      "css": ".gate{width:420px;padding:32px;text-align:center;background:#EDF3E7;color:#234235;font:16px/1.7 sans-serif}.gate strong{font-size:30px}"
     },
     {
-      "name": "结算面板",
-      "kind": "custom",
-      "description": "尺寸 560 × 310；实际游戏叠加深林墨 alpha 145 / 255 的全屏遮罩。",
-      "html": "<div class=\"ds-result\"><strong>这一站，守住了。</strong><p>击退雾团，两位伙伴可以继续出发。</p><button>继续选择路线</button></div>",
-      "css": ".ds-result{width:560px;height:310px;border-radius:20px;background:#FCFDF7;position:relative;text-align:center;font-family:sans-serif}.ds-result strong{position:absolute;top:42px;left:30px;width:500px;font-size:34px;line-height:1.45;color:#337354}.ds-result p{position:absolute;top:118px;left:35px;width:490px;margin:0;font-size:19px;line-height:1.45;color:#526A58}.ds-result button{position:absolute;left:120px;bottom:35px;width:320px;height:52px;border:0;border-radius:12px;background:#337354;color:#FCFDF7;font:700 18px/1.45 sans-serif}.ds-result button:hover{transform:scale(1.025)}"
+      "name": "宠物数据卡",
+      "kind": "card",
+      "description": "656 × 152，名称、攻击/施法数据、效果、部署信息；选中实例支持收回。",
+      "html": "<div class=\"info\"><strong>铃芽鹿 · 增益</strong><span>施法范围 185 · 友军攻击力 +40% · 不攻击</span><span>范围内友军获得增益，同类光环不叠加</span></div>",
+      "css": ".info{width:656px;height:152px;box-sizing:border-box;padding:16px 20px;display:flex;flex-direction:column;justify-content:space-around;border-radius:16px;background:#FCFDF7;color:#234235;font:23px sans-serif}.info strong{font-size:28px;color:#4D8251}"
     }
   ],
   "narrative": {
     "northStar": "浅色森林棋盘",
-    "overview": "浅绿棋盘承载路线、道路、树桩与伙伴。深绿文字保持清楚的层级，橙猫与蓝兔用颜色和轮廓共同区分近战、远程；这是用户确认的视觉方向。\n\n本规范记录 Cocos Creator 3.8.8 的 `Graphics` / `Label` 实现。所有角色与界面均程序绘制，优先支持选择、放置和防守；以下尺寸均为 1280 × 720 设计坐标中的单位，前置 token 的 `px` 是交换格式表达，并非 CSS 实现。依据为 `assets/scripts/presentation/MvpGame.ts` 与 `.impeccable/review/` 的四张实际 Web 构建截图。",
+    "overview": "仅竖屏的程序绘制塔防：左上雾兽入口、右下摇篮树、16 个树桩；顶部状态和选中数据，底部四个纯头像。猫近战、兔远程、鹿增益、菇持续伤害。点击查看范围与数据，场上长按 0.3 秒拖到空位搬迁。",
     "keyCharacteristics": [
-      "浅绿底、沙色道路、深绿信息与主要操作。",
-      "圆角容器、圆形树桩及几何角色，不依赖外部美术素材。",
-      "颜色、描边和中文状态文案共同说明可用与选中状态。"
+      "浅绿战场、沙色折返道路，角色色辅助区分四种定位。",
+      "范围和即时数据集中显示，头像栏不放文字。",
+      "范围/特效在战场内裁切，拖动头像独立显示。"
     ],
     "rules": [
       {
@@ -420,14 +449,14 @@
       }
     ],
     "dos": [
-      "Do 保持浅色森林棋盘、橙猫、蓝兔与程序绘制方向。",
-      "Do 让选择、部署、锁定和完成状态同时有可见图形差异与中文文案。",
-      "Do 以 1280 × 720 设计坐标核对整体缩放后的文字、树桩与操作栏。"
+      "保持浅色森林、橙猫和蓝兔。",
+      "以 720 × 1280 设计坐标核对文字和触点。",
+      "方向变化时冻结战斗并保留玩家手动暂停状态。"
     ],
     "donts": [
-      "Don't 把颜色当作近远程或交互状态的唯一线索。",
-      "Don't 将文档 token 当作游戏中已存在的 CSS 变量或外部字体依赖。",
-      "Don't 将当前等比缩放描述为已完成手机竖屏重排或键盘焦点系统。"
+      "不要添加横屏玩法布局。",
+      "不要通过适配布局改变战斗数值。",
+      "不要把此面板的 HTML/CSS 当作游戏运行时实现。"
     ]
   }
 }

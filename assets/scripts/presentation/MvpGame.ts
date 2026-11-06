@@ -1,14 +1,22 @@
 import {
-    _decorator, Color, Component, EventKeyboard, game, Game, Graphics, input, Input,
-    KeyCode, Label, Layers, Node, profiler, ResolutionPolicy, UITransform, view,
+    _decorator, BlockInputEvents, Color, Component, EventKeyboard, EventTouch, game, Game, Graphics, input, Input,
+    KeyCode, Label, Layers, Mask, Node, profiler, ResolutionPolicy, screen, UITransform, Vec3, view,
 } from 'cc';
-import { MvpSession, PATH, PETS, PetId, ROUTE, SLOTS, STEP } from '../domain/MvpSession';
+import { ActionError, ECONOMY, MvpSession, PATH, PETS, PET_ORDER, PetActionResult, PetId, ROUTE, SLOTS, STEP } from '../domain/MvpSession';
+import { isPortrait, PortraitLayout, portraitLayout, portraitSlotAt, PORTRAIT_MIN_HEIGHT, PORTRAIT_WIDTH, toPortraitBoard } from './PortraitLayout';
 
 const { ccclass } = _decorator;
+type Selection = { kind: 'summon'; species: PetId } | { kind: 'pet'; id: number };
+interface SummonDrag {
+    touchId: number; species: PetId;
+    start: { x: number; y: number }; point: { x: number; y: number }; moved: boolean;
+    selection: Selection | null; originSlot: number | null; elapsed: number; active: boolean; startedAt: number;
+}
 const C = {
     bg: '#EDF3E7', ink: '#234235', muted: '#526A58', green: '#337354', pale: '#D9E6D0',
     board: '#DDE9D3', roadEdge: '#B9C8A8', road: '#F5EED9', white: '#FCFDF7',
     orange: '#B85C20', cat: '#F1AF64', blue: '#286A9C', rabbit: '#96CBE3',
+    deer: '#C9AD77', leaf: '#4D8251', mushroom: '#CE9DD1', spore: '#87539D',
     red: '#A64243', enemy: '#A46D9F', enemyDark: '#6F4A72', line: '#A5B89C',
 };
 function color(hex: string, alpha = 255): Color {
@@ -21,30 +29,55 @@ export class MvpGame extends Component {
     private session = new MvpSession();
     private screenRoot: Node | null = null;
     private dynamic: Graphics | null = null;
+    private dragVisual: Graphics | null = null;
     private status: Label | null = null;
     private counter: Label | null = null;
-    private selected: PetId = 'cat';
+    private selected: Selection = { kind: 'summon', species: 'cat' };
+    private dewLabel: Label | null = null;
+    private deploymentLabel: Label | null = null;
+    private infoTitle: Label | null = null;
+    private infoStats: Label | null = null;
+    private infoEffect: Label | null = null;
+    private infoMeta: Label | null = null;
+    private infoAction: Label | null = null;
+    private feedback = '';
+    private feedbackError: ActionError | null = null;
     private accumulator = 0;
-    private paused = false;
     private speed = 1;
     private lastStatus = '';
     private lastCounter = '';
+    private layout: PortraitLayout = portraitLayout(PORTRAIT_MIN_HEIGHT);
+    private orientationBlocked = false;
+    private resumeAfterPortrait = false;
+    private orientationGate: HTMLDivElement | null = null;
+    private reservesOpen = false;
+    private summonDrag: SummonDrag | null = null;
 
     onEnable(): void {
         input.on(Input.EventType.KEY_DOWN, this.onKey, this);
         game.on(Game.EVENT_HIDE, this.onHide, this);
+        screen.on('window-resize', this.onViewportResize, this);
+        if (this.screenRoot) this.onViewportResize();
     }
     onDisable(): void {
+        this.summonDrag = null;
         input.off(Input.EventType.KEY_DOWN, this.onKey, this);
         game.off(Game.EVENT_HIDE, this.onHide, this);
+        screen.off('window-resize', this.onViewportResize, this);
+        if (this.orientationGate) this.orientationGate.style.display = 'none';
     }
+    onDestroy(): void { this.orientationGate?.remove(); }
     start(): void {
-        view.setDesignResolutionSize(1280, 720, ResolutionPolicy.SHOW_ALL);
         profiler.hideStats();
-        this.renderScreen();
+        this.onViewportResize();
     }
     update(dt: number): void {
-        if (this.session.phase === 'battle' && !this.paused) {
+        const drag = this.summonDrag;
+        if (drag) {
+            drag.elapsed = Math.max(drag.elapsed + Math.min(dt, 0.1), (this.gestureTime() - drag.startedAt) / 1000);
+            if (drag.selection && !this.session.paused && drag.elapsed >= 0.3) drag.active = true;
+        }
+        if (!this.orientationBlocked && this.session.phase === 'battle' && !this.session.paused) {
             this.accumulator += Math.min(dt, 0.1) * this.speed;
             let steps = 0;
             while (this.accumulator >= STEP && steps++ < 12) {
@@ -56,32 +89,152 @@ export class MvpGame extends Component {
         this.updateHud();
     }
     private onHide(): void {
-        if (this.session.phase === 'battle') { this.paused = true; this.accumulator = 0; this.renderScreen(); }
+        this.summonDrag = null;
+        this.resumeAfterPortrait = false;
+        if (this.session.setPaused(true)) { this.accumulator = 0; this.renderScreen(); }
     }
     private onKey(event: EventKeyboard): void {
+        if (this.orientationBlocked || this.reservesOpen || this.summonDrag) return;
         if (event.keyCode === KeyCode.DIGIT_1) this.selectPet('cat');
         if (event.keyCode === KeyCode.DIGIT_2) this.selectPet('rabbit');
+        if (event.keyCode === KeyCode.DIGIT_3) this.selectPet('deer');
+        if (event.keyCode === KeyCode.DIGIT_4) this.selectPet('mushroom');
         if (event.keyCode === KeyCode.SPACE) {
             if (this.session.phase === 'prepare') this.begin();
             else if (this.session.phase === 'battle') this.togglePause();
         }
     }
     private selectPet(id: PetId): void {
-        if (this.session.phase !== 'prepare') return;
-        this.selected = id; this.renderScreen();
+        if (this.session.phase !== 'prepare' && this.session.phase !== 'battle') return;
+        this.selected = { kind: 'summon', species: id }; this.clearFeedback(); this.renderScreen();
     }
     private begin(): void {
-        if (this.session.startBattle()) { this.accumulator = 0; this.paused = false; this.renderScreen(); }
+        if (this.session.startBattle()) { this.accumulator = 0; this.clearFeedback(); this.renderScreen(); }
     }
     private togglePause(): void {
-        this.paused = !this.paused; this.accumulator = 0; this.renderScreen();
+        this.session.setPaused(!this.session.paused); this.accumulator = 0; this.clearFeedback(); this.renderScreen();
     }
     private restart(): void {
-        this.session = new MvpSession(); this.selected = 'cat'; this.paused = false;
-        this.accumulator = 0; this.speed = 1; this.renderScreen();
+        this.session = new MvpSession(); this.selected = { kind: 'summon', species: 'cat' }; this.clearFeedback();
+        this.accumulator = 0; this.speed = 1; this.reservesOpen = false; this.renderScreen();
     }
 
-    private uiNode(name: string, parent: Node, x = 0, y = 0, width = 1280, height = 720): Node {
+    private clearFeedback(): void { this.feedback = ''; this.feedbackError = null; }
+
+    private handleSlot(slot: number): void {
+        if (this.orientationBlocked || this.reservesOpen || this.summonDrag) return;
+        if (this.session.phase !== 'prepare' && this.session.phase !== 'battle') return;
+        const occupant = this.session.pets.find(p => p.slot === slot);
+        if (occupant) {
+            this.selected = { kind: 'pet', id: occupant.id }; this.clearFeedback(); this.renderScreen(); return;
+        }
+        if (this.session.paused) { this.feedback = '暂停期间不能召唤或搬迁，请先继续战斗'; return; }
+        if (this.selected.kind === 'pet') this.handlePetAction(this.session.movePet(this.selected.id, slot), false);
+        else this.handlePetAction(this.session.summonPet(this.selected.species, slot), true);
+    }
+
+    private handlePetAction(result: PetActionResult, summoned: boolean): void {
+        if (result.ok === false) {
+            const messages: Record<ActionError, string> = {
+                WRONG_PHASE: '当前阶段不能放置宠物', PAUSED: '请先继续战斗', INVALID_SLOT: '请选择有效树桩',
+                INVALID_SPECIES: '未知宠物种类', SLOT_OCCUPIED: '树桩已被占用，请选择空位',
+                INSUFFICIENT_DEW: '灵露不足，战斗中会持续产出，也可通过击杀获得',
+                DEPLOYMENT_FULL: '场上最多 6 只，可先撤下一只宠物', ROSTER_FULL: '本局最多持有 12 只宠物',
+                PET_NOT_FOUND: '宠物不存在，请重新选择',
+            };
+            this.feedback = messages[result.reason];
+            this.feedbackError = result.reason;
+            this.renderScreen();
+        } else {
+            this.feedbackError = null;
+            this.feedback = summoned ? `召唤${PETS[result.pet.species].name}，消耗 ${ECONOMY.summonCost} 灵露`
+                : result.pet.slot === null ? '已收回后备，重新部署免费，不返还灵露'
+                    : this.session.phase === 'battle' ? '搬迁完成，1 秒后恢复攻击或施法' : '';
+            this.renderScreen();
+        }
+    }
+
+    private touchPoint(event: EventTouch): { x: number; y: number } | null {
+        const transform = this.screenRoot?.getComponent(UITransform);
+        if (!transform) return null;
+        const touch = event.getUILocation();
+        const point = transform.convertToNodeSpaceAR(new Vec3(touch.x, touch.y, 0));
+        return { x: point.x, y: point.y };
+    }
+
+    private startGesture(selection: Selection | null, slot: number | null, event: EventTouch): void {
+        if (this.summonDrag || this.orientationBlocked || this.reservesOpen) return;
+        if (this.session.phase !== 'prepare' && this.session.phase !== 'battle') return;
+        const touchId = event.getID(); const point = this.touchPoint(event);
+        if (touchId === null || !point) return;
+        const pet = selection?.kind === 'pet' ? this.session.pets.find(p => p.id === selection.id) : undefined;
+        const species = selection?.kind === 'summon' ? selection.species : pet?.species ?? 'cat';
+        if (selection) this.selected = selection;
+        // Keep the source alive: range and data labels update without rebuilding its touch node.
+        this.summonDrag = { touchId, species, selection, originSlot: slot,
+            start: point, point, moved: false, elapsed: 0, active: false, startedAt: this.gestureTime() };
+        this.clearFeedback();
+    }
+
+    private startBoardGesture(event: EventTouch): void {
+        const point = this.touchPoint(event); if (!point) return;
+        const slot = portraitSlotAt(point, this.layout); if (slot === null) return;
+        const pet = this.session.pets.find(p => p.slot === slot);
+        this.startGesture(pet ? { kind: 'pet', id: pet.id } : null, slot, event);
+    }
+
+    // This clock measures a UI hold only; combat, income and cooldowns remain fixed-step.
+    private gestureTime(): number { return typeof performance === 'undefined' ? Date.now() : performance.now(); }
+
+    private moveSummonDrag(event: EventTouch): void {
+        const drag = this.summonDrag;
+        if (!drag || event.getID() !== drag.touchId) return;
+        const point = this.touchPoint(event); if (!point) return;
+        drag.point = point;
+        drag.elapsed = Math.max(drag.elapsed, (this.gestureTime() - drag.startedAt) / 1000);
+        if (drag.selection && drag.elapsed >= 0.3 && !this.session.paused) drag.active = true;
+        if (Math.hypot(point.x - drag.start.x, point.y - drag.start.y) >= 12) drag.moved = true;
+        // Summon avatars retain immediate dragging. Deployed pets require a 0.3-second hold.
+        if (drag.selection?.kind === 'summon' && drag.moved && !this.session.paused) drag.active = true;
+    }
+
+    private finishSummonDrag(event: EventTouch): void {
+        const drag = this.summonDrag;
+        if (!drag || event.getID() !== drag.touchId) return;
+        // 3.8.8 changes an outside release into node CANCEL; retain the original event code.
+        if (event.getEventCode() !== Input.EventType.TOUCH_END) {
+            this.summonDrag = null; this.clearFeedback(); return;
+        }
+        this.moveSummonDrag(event); this.summonDrag = null;
+        if (this.orientationBlocked || this.reservesOpen) return;
+        if (!drag.selection) {
+            if (!drag.moved && drag.originSlot !== null) this.handleSlot(drag.originSlot);
+            return;
+        }
+        if (!drag.active || !drag.moved || this.session.paused) { this.renderScreen(); return; }
+        const slot = portraitSlotAt(drag.point, this.layout);
+        if (slot === null) { this.feedback = '已取消放置，请拖到空树桩'; this.renderScreen(); return; }
+        if (slot === drag.originSlot) { this.renderScreen(); return; }
+        if (this.session.pets.some(p => p.slot === slot)) {
+            this.handlePetAction({ ok: false, reason: 'SLOT_OCCUPIED' }, false); return;
+        }
+        // Preview changes neither roster nor balance. Commit exactly once on a valid release.
+        this.handlePetAction(drag.selection.kind === 'summon'
+            ? this.session.summonPet(drag.species, slot) : this.session.movePet(drag.selection.id, slot),
+        drag.selection.kind === 'summon');
+    }
+
+    private bindGesture(node: Node): void {
+        node.on(Node.EventType.TOUCH_MOVE, this.moveSummonDrag, this);
+        node.on(Node.EventType.TOUCH_END, this.finishSummonDrag, this);
+        node.on(Node.EventType.TOUCH_CANCEL, this.finishSummonDrag, this);
+    }
+
+    private petTint(id: PetId): string {
+        return id === 'cat' ? C.orange : id === 'rabbit' ? C.blue : id === 'deer' ? C.leaf : C.spore;
+    }
+
+    private uiNode(name: string, parent: Node, x = 0, y = 0, width = PORTRAIT_WIDTH, height = this.layout.height): Node {
         const node = new Node(name); node.layer = Layers.Enum.UI_2D;
         parent.addChild(node); node.setPosition(x, y);
         node.addComponent(UITransform).setContentSize(width, height);
@@ -111,203 +264,382 @@ export class MvpGame extends Component {
         action: () => void, fill = C.green, textTint = C.white, active = true): Node {
         const node = this.uiNode(title, parent, x, y, w, h);
         const g = node.addComponent(Graphics); this.rect(g, 0, 0, w, h, active ? fill : C.pale);
-        this.text(node, title, 0, 0, 18, w - 16, active ? textTint : C.muted, false, true, h);
+        this.text(node, title, 0, 0, 26, w - 20, active ? textTint : C.muted, false, true, h);
         if (active) {
-            node.on(Node.EventType.TOUCH_END, action, this);
+            node.on(Node.EventType.TOUCH_END, () => { if (!this.summonDrag) action(); }, this);
             node.on(Node.EventType.MOUSE_ENTER, () => { node.setScale(1.025, 1.025, 1); }, this);
             node.on(Node.EventType.MOUSE_LEAVE, () => { node.setScale(1, 1, 1); }, this);
         }
         return node;
     }
 
+    private onViewportResize(): void {
+        this.summonDrag = null;
+        const size = typeof window !== 'undefined'
+            ? { width: window.innerWidth, height: window.innerHeight } : screen.windowSize;
+        if (size.width <= 0 || size.height <= 0) return;
+        const blocked = !isPortrait(size.width, size.height);
+        if (blocked && !this.orientationBlocked) {
+            this.resumeAfterPortrait = this.session.phase === 'battle' && !this.session.paused;
+            if (this.resumeAfterPortrait) this.session.setPaused(true);
+            this.reservesOpen = false;
+        } else if (!blocked && this.orientationBlocked && this.resumeAfterPortrait) {
+            this.session.setPaused(false); this.resumeAfterPortrait = false;
+        }
+        this.orientationBlocked = blocked; this.accumulator = 0;
+        const tall = !blocked && size.height / size.width >= PORTRAIT_MIN_HEIGHT / PORTRAIT_WIDTH;
+        view.setDesignResolutionSize(PORTRAIT_WIDTH, PORTRAIT_MIN_HEIGHT,
+            tall ? ResolutionPolicy.FIXED_WIDTH : ResolutionPolicy.SHOW_ALL);
+        this.layout = portraitLayout(view.getVisibleSize().height);
+        this.updateOrientationGate();
+        this.renderScreen();
+    }
+
+    private updateOrientationGate(): void {
+        // Web browsers may rotate the Cocos canvas automatically. Keep this gate in physical screen space.
+        if (typeof document === 'undefined') return;
+        if (!this.orientationGate) {
+            const gate = document.createElement('div');
+            gate.setAttribute('role', 'dialog'); gate.setAttribute('aria-label', '请竖屏游玩');
+            gate.setAttribute('aria-modal', 'true');
+            gate.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#EDF3E7;color:#234235;display:none;align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:32px;box-sizing:border-box;text-align:center;font-family:sans-serif;touch-action:none;';
+            const phone = document.createElement('div');
+            phone.style.cssText = 'width:52px;height:88px;border:3px solid #337354;border-radius:12px;margin-bottom:8px;';
+            const title = document.createElement('strong'); title.textContent = '请竖屏游玩'; title.style.fontSize = '30px';
+            const body = document.createElement('div'); body.textContent = '本游戏仅支持竖屏。请旋转设备，或将窗口调成竖向。';
+            body.style.cssText = 'font-size:16px;line-height:1.7;max-width:420px;';
+            gate.append(phone, title, body); document.body.appendChild(gate); this.orientationGate = gate;
+        }
+        this.orientationGate.style.display = this.orientationBlocked ? 'flex' : 'none';
+    }
+
+    private boardPoint(point: { x: number; y: number }): { x: number; y: number } {
+        return toPortraitBoard(point, this.layout);
+    }
+
     private renderScreen(): void {
+        this.summonDrag = null;
         if (this.screenRoot) { this.screenRoot.removeFromParent(); this.screenRoot.destroy(); }
-        this.dynamic = null; this.status = null; this.counter = null; this.lastStatus = ''; this.lastCounter = '';
-        const root = this.uiNode('MVP', this.node); this.screenRoot = root;
-        const g = this.graphics(root, 'Background'); this.rect(g, 0, 0, 1280, 720, C.bg, 0);
-        this.text(root, '萌宠变异录', -432, 310, 30, 320, C.ink, true, true);
-        this.text(root, '无素材可玩原型', -157, 310, 15, 180, C.muted);
-        this.line(g, -590, 270, 590, 270, C.line, 1);
+        this.dynamic = null; this.dragVisual = null; this.status = null; this.counter = null; this.lastStatus = ''; this.lastCounter = '';
+        this.dewLabel = null; this.deploymentLabel = null;
+        this.infoTitle = null; this.infoStats = null; this.infoEffect = null; this.infoMeta = null; this.infoAction = null;
+        const root = this.uiNode('PortraitMVP', this.node); this.screenRoot = root;
+        const g = this.graphics(root, 'Background'); this.rect(g, 0, 0, PORTRAIT_WIDTH, this.layout.height, C.bg, 0);
+        if (this.orientationBlocked) {
+            root.addComponent(BlockInputEvents);
+            this.text(root, '请竖屏游玩', 0, 30, 44, 640, C.green, false, true, 90);
+            this.text(root, '本游戏仅支持竖屏\n调整设备或窗口方向后继续', 0, -70, 28, 640, C.muted, false, false, 110);
+            return;
+        }
+        this.text(root, '萌宠变异录', -110, this.layout.top - 46, 32, 420, C.ink, true, true);
+        this.text(root, `树心 ${this.session.heart}/1`, 240, this.layout.top - 46, 24, 170, C.green);
         if (this.session.phase === 'map' || this.session.phase === 'complete') this.drawMap(root, g);
         else this.drawBattle(root, g);
     }
 
     private drawMap(root: Node, g: Graphics): void {
-        this.text(root, `树心 ${this.session.heart} / 1`, 490, 310, 19, 190, C.green, false, true);
+        const { top, bottom, height } = this.layout;
         const complete = this.session.phase === 'complete';
-        this.text(root, complete ? '家园，抵达了。' : '选一条路，\n护送我们的家。', -413, 176, 37, 355, C.ink, true, true, 122);
-        this.text(root, complete ? '三场防守全部完成。\n两位小伙伴守住了摇篮树。' : '点击亮起的节点，开始防守。\n每次选择，都决定下一段旅程。',
-            -413, 62, 18, 355, C.muted, true, false, 80);
-        this.petIcon(g, -550, -65, 'cat', 0.9); this.petIcon(g, -550, -166, 'rabbit', 0.9);
-        this.text(root, '爪爪猫 · 近战', -367, -47, 21, 250, C.orange, true, true);
-        this.text(root, '短距离挥击，单次伤害高', -367, -80, 16, 250, C.muted, true);
-        this.text(root, '星弹兔 · 远程', -367, -148, 21, 250, C.blue, true, true);
-        this.text(root, '远距离发射星弹，覆盖更广', -367, -181, 16, 250, C.muted, true);
-        this.text(root, '基地一旦受伤，本局立即结束。', -413, -270, 17, 355, C.red, true);
-        this.rect(g, 235, -10, 650, 510, C.board, 22);
+        this.text(root, `远征路线  ${this.session.visited.length} / 3`, 0, top - 92, 24, 640, C.muted);
+        this.text(root, complete ? '家园，抵达了。' : '选一条路，护送我们的家。', 0, top - 170, 36, 650, C.ink, false, true, 90);
+        this.text(root, complete ? '三场防守完成，萌宠小队守住了摇篮树。' : '每场 60 灵露，选择伙伴守住防线。\n已召唤的小队会陪你继续远征。',
+            0, top - 256, 24, 640, C.muted, false, false, 76);
+        const routeBottom = bottom + 260; const routeHeight = height - 582;
+        this.rect(g, 0, routeBottom + routeHeight / 2, 656, routeHeight, C.board, 22);
+        const positions = new Map(ROUTE.map(n => [n.id, {
+            x: n.depth === 2 ? 0 : n.x < 150 ? -150 : 150,
+            y: routeBottom + 130 + n.depth * (routeHeight - 240) / 2,
+        }]));
         const available = this.session.available;
         for (const n of ROUTE) {
+            const a = positions.get(n.id); if (!a) continue;
             for (const id of n.children) {
-                const next = ROUTE.find(r => r.id === id);
-                if (!next) continue;
+                const b = positions.get(id); if (!b) continue;
                 const walked = this.session.visited.includes(n.id) && this.session.visited.includes(id);
-                this.line(g, n.x + 100, n.y, next.x + 100, next.y, walked ? C.green : C.line, walked ? 5 : 2);
+                this.line(g, a.x, a.y, b.x, b.y, walked ? C.green : C.line, walked ? 5 : 2);
             }
         }
         for (const n of ROUTE) {
-            const open = available.some(a => a.id === n.id); const done = this.session.visited.includes(n.id);
-            const x = n.x + 100; const y = n.y;
-            this.circle(g, x, y, 40, done ? C.green : open ? C.white : '#C6D4BD');
-            if (open) { g.strokeColor = color(C.green); g.lineWidth = 3; g.circle(x, y, 40); g.stroke(); }
+            const point = positions.get(n.id); if (!point) continue;
+            const { x, y } = point; const open = available.some(a => a.id === n.id);
+            const done = this.session.visited.includes(n.id);
+            this.circle(g, x, y, 48, done ? C.green : open ? C.white : '#C6D4BD');
+            if (open) { g.strokeColor = color(C.green); g.lineWidth = 3; g.circle(x, y, 48); g.stroke(); }
             if (done) {
-                this.line(g, x - 13, y, x - 2, y - 10, C.white, 4); this.line(g, x - 2, y - 10, x + 17, y + 13, C.white, 4);
-            } else if (n.depth === 2) this.tree(g, x, y - 2, 0.5);
-            else {
-                this.circle(g, x, y, 13, open ? C.green : C.muted);
-                this.line(g, x - 19, y + 16, x + 19, y - 16, open ? C.green : C.muted, 3);
-            }
-            this.text(root, n.name, x, y - 57, 19, 205, done || open ? C.ink : C.muted, false, true, 36);
-            this.text(root, done ? '已守住' : open ? n.detail : '沿连线解锁', x, y - 86, 14, 225, C.muted, false, false, 30);
+                this.line(g, x - 17, y, x - 3, y - 13, C.white, 4); this.line(g, x - 3, y - 13, x + 21, y + 16, C.white, 4);
+            } else if (n.depth === 2) this.tree(g, x, y - 3, 0.6);
+            else { this.circle(g, x, y, 15, open ? C.green : C.muted); this.line(g, x - 22, y + 18, x + 22, y - 18, open ? C.green : C.muted, 3); }
+            this.text(root, n.name, x, y - 69, 26, 270, done || open ? C.ink : C.muted, false, true, 42);
+            const detail = done ? '已守住' : open ? `${n.count} 只雾团` : '沿连线解锁';
+            this.text(root, detail, x, y - 105, 22, 270, C.muted, false, false, 36);
             if (open) {
-                const hit = this.uiNode(`Route-${n.id}`, root, x, y - 20, 185, 125);
-                hit.on(Node.EventType.TOUCH_END, () => { if (this.session.chooseNode(n.id)) this.renderScreen(); }, this);
-                hit.on(Node.EventType.MOUSE_ENTER, () => { hit.setScale(1.03, 1.03, 1); }, this);
+                const hit = this.uiNode(`Route-${n.id}`, root, x, y - 30, 260, 164);
+                hit.on(Node.EventType.TOUCH_END, () => {
+                    if (this.session.chooseNode(n.id)) { this.reservesOpen = false; this.clearFeedback(); this.renderScreen(); }
+                }, this);
             }
         }
-        if (complete) this.button(root, '再出发一次', -413, -325, 300, 44, () => this.restart());
-        this.text(root, complete ? '远征完成 · 三段路线全部守住' : `路线进度 ${this.session.visited.length} / 3 · 只能沿连线前进`,
-            235, -310, 17, 640, C.muted);
+        PET_ORDER.forEach((id, i) => {
+            const x = -240 + i * 160;
+            this.petIcon(g, x, bottom + 198, id, 0.95);
+            this.text(root, PETS[id].name, x, bottom + 141, 22, 155, this.petTint(id), false, true, 36);
+        });
+        if (complete) this.button(root, '再出发一次', 0, bottom + 64, 640, 84, () => this.restart());
+        else {
+            this.text(root, '基地一旦受伤，本局立即结束', 0, bottom + 92, 24, 656, C.red);
+            this.text(root, '点击亮起的节点，开始防守', 0, bottom + 40, 22, 656, C.muted);
+        }
     }
 
     private drawBattle(root: Node, g: Graphics): void {
         const session = this.session; const current = session.current;
         if (!current) return;
-        this.text(root, `${current.name}  ·  第 ${session.visited.length + 1} / 3 站`, 410, 310, 19, 370, C.ink);
-        this.rect(g, -130, 5, 950, 510, C.board, 20);
-        this.rect(g, 485, -5, 240, 530, C.white, 18);
-        // The path itself is the board's structure; foliage stays outside its readable lanes.
+        const { top, bottom, arenaHeight, arenaCenter } = this.layout;
+        this.counter = this.text(root, '', 0, top - 91, 24, 656, C.muted, false, false, 40);
+        this.rect(g, 0, top - 152, 656, 76, C.white, 16);
+        this.text(root, '受伤即结束', -185, top - 167, 22, 250, C.red, false, false, 32);
+        this.text(root, `${current.name} · 第 ${session.visited.length + 1} 站`, -185, top - 132, 22, 250, C.ink, false, true, 36);
+        this.dewLabel = this.text(root, '', 140, top - 134, 32, 330, C.green, false, true, 48);
+        this.text(root, `战斗 +${ECONOMY.dewPerSecond}/秒 · 击杀 +${ECONOMY.dewPerKill}`, 140, top - 169, 22, 330, C.muted, false, false, 32);
+        this.rect(g, 0, arenaCenter, 656, arenaHeight, C.board, 22);
         for (let i = 0; i < 18; i++) {
-            const x = -570 + (i * 137 % 850); const y = i % 2 === 0 ? 230 : -230;
-            this.circle(g, x, y, 4 + i % 3, '#BCCFAC');
+            this.circle(g, i % 2 === 0 ? -290 : 290, this.layout.arenaBottom + 38 + (i * 97 % (arenaHeight - 76)), 4 + i % 3, '#BCCFAC');
         }
-        for (let i = 1; i < PATH.length; i++) {
-            this.line(g, PATH[i - 1].x, PATH[i - 1].y, PATH[i].x, PATH[i].y, C.roadEdge, 53);
-            this.line(g, PATH[i - 1].x, PATH[i - 1].y, PATH[i].x, PATH[i].y, C.road, 45);
+        const points = PATH.map(p => this.boardPoint(p));
+        for (let i = 1; i < points.length; i++) {
+            this.line(g, points[i - 1].x, points[i - 1].y, points[i].x, points[i].y, C.roadEdge, 52);
+            this.line(g, points[i - 1].x, points[i - 1].y, points[i].x, points[i].y, C.road, 44);
         }
-        for (const p of PATH) this.circle(g, p.x, p.y, 22, C.road);
+        for (const p of points) this.circle(g, p.x, p.y, 22, C.road);
         for (let i = 0; i < SLOTS.length; i++) {
-            const p = SLOTS[i];
-            this.circle(g, p.x, p.y, 30, '#BED0AE'); this.circle(g, p.x, p.y, 24, '#F9F5E7');
-            this.line(g, p.x - 7, p.y, p.x + 7, p.y, '#899C79', 2);
-            this.line(g, p.x, p.y - 7, p.x, p.y + 7, '#899C79', 2);
-            const hit = this.uiNode(`Slot-${i + 1}`, root, p.x, p.y, 60, 60);
-            hit.on(Node.EventType.TOUCH_END, () => {
-                if (this.session.placePet(this.selected, i)) this.renderScreen();
-            }, this);
+            const p = this.boardPoint(SLOTS[i]);
+            this.circle(g, p.x, p.y, 35, '#BED0AE'); this.circle(g, p.x, p.y, 29, '#F9F5E7');
+            this.line(g, p.x - 8, p.y, p.x + 8, p.y, '#899C79', 2);
+            this.line(g, p.x, p.y - 8, p.x, p.y + 8, '#899C79', 2);
         }
-        this.tree(g, 290, -90, 0.9);
-        this.text(root, '摇篮树', 284, -169, 18, 120, C.green, false, true);
-        this.text(root, '入口', -553, 148, 15, 90, C.muted);
-        this.text(root, `树心  ${session.heart} / 1`, 485, 224, 23, 220, session.heart ? C.green : C.red, false, true);
-        this.text(root, '受伤即结束', 485, 186, 15, 220, C.red);
-        this.petCard(root, 'cat', 100); this.petCard(root, 'rabbit', -30);
-        this.counter = this.text(root, '', 485, -135, 16, 225, C.muted);
-        const prepare = session.phase === 'prepare';
-        if (prepare) {
-            this.button(root, '开始防守', 485, -205, 200, 50, () => this.begin());
+        const board = this.uiNode('BattlePlacement', root, 0, arenaCenter, 656, arenaHeight);
+        board.on(Node.EventType.TOUCH_START, this.startBoardGesture, this); this.bindGesture(board);
+        const base = points[points.length - 1]; const entry = points[0];
+        this.tree(g, base.x, base.y, 0.66);
+        this.text(root, '摇篮树', base.x - 112, base.y - 12, 22, 140, C.green, false, true, 38);
+        this.text(root, '雾兽入口', entry.x + 104, entry.y, 22, 150, C.muted);
+        PET_ORDER.forEach((id, i) => this.petCard(root, id, -240 + i * 160, bottom + 216));
+        this.deploymentLabel = this.text(root, '', 0, bottom + 312, 22, 640, C.ink, false, false, 32);
+        this.drawInfoCard(root, g);
+        if (session.phase === 'prepare') {
+            this.button(root, '开始防守', -110, bottom + 112, 420, 84, () => this.begin());
         } else if (session.phase === 'battle') {
-            this.button(root, this.paused ? '继续' : '暂停', 435, -205, 92, 48, () => this.togglePause());
-            this.button(root, `${this.speed} 倍速`, 540, -205, 92, 48,
+            this.button(root, session.paused ? '继续战斗' : '暂停', -220, bottom + 112, 200, 84, () => this.togglePause());
+            this.button(root, `${this.speed} 倍速`, 0, bottom + 112, 200, 84,
                 () => { this.speed = this.speed === 1 ? 2 : 1; this.renderScreen(); }, C.pale, C.ink);
         }
-        this.text(root, '快捷键  1 / 2 选宠 · 空格开战 / 暂停', -130, -315, 16, 900, C.muted);
-        this.status = this.text(root, '', -130, -278, 19, 900, C.ink, false, true, 45);
-        this.dynamic = this.graphics(root, 'LiveBattle');
+        const count = session.pets.filter(p => p.slot === null).length;
+        this.button(root, `后备 ${count}`, 220, bottom + 112, 200, 84,
+            () => { this.reservesOpen = true; this.renderScreen(); }, C.pale, C.ink, count > 0);
+        this.status = this.text(root, '', 0, bottom + 33, 24, 656, C.ink, false, false, 64);
+        this.status.lineHeight = 30;
+        const clipped = this.uiNode('BattleClip', root, 0, arenaCenter, 656, arenaHeight);
+        clipped.addComponent(Mask).type = Mask.Type.GRAPHICS_RECT;
+        this.dynamic = this.graphics(clipped, 'LiveBattle');
+        this.dynamic.node.setPosition(0, -arenaCenter);
+        this.dragVisual = this.graphics(root, 'DragAvatar');
         if (session.phase === 'won' || session.phase === 'lost') this.resultOverlay(root);
+        else if (this.reservesOpen) this.reserveOverlay(root);
     }
 
-    private petCard(root: Node, id: PetId, y: number): void {
-        const spec = PETS[id]; const pet = this.session.pets.find(p => p.id === id);
-        const preparing = this.session.phase === 'prepare'; const chosen = preparing && this.selected === id;
-        const node = this.uiNode(`Pet-${id}`, root, 485, y, 214, 118);
+    private petCard(root: Node, id: PetId, x: number, y: number): void {
+        const node = this.uiNode(`Pet-${id}`, root, x, y, 120, 106);
         const g = node.addComponent(Graphics);
-        this.rect(g, 0, 0, 214, 118, chosen ? (id === 'cat' ? '#F8E5CD' : '#DFEFF5') : '#F0F3E9');
-        if (chosen) { g.strokeColor = color(id === 'cat' ? C.orange : C.blue); g.lineWidth = 2; g.roundRect(-107, -59, 214, 118, 12); g.stroke(); }
-        this.petIcon(g, -70, 14, id, 0.6);
-        this.text(node, spec.name, 24, 31, 19, 135, id === 'cat' ? C.orange : C.blue, false, true, 32);
-        this.text(node, `${spec.role} · ${spec.damage} 伤害`, 24, 0, 15, 135, C.muted, false, false, 30);
-        this.text(node, `${pet?.slot === null ? '待放置' : `已放置 · 树桩 ${(pet?.slot ?? 0) + 1}`}${chosen ? '  / 已选中' : ''}`,
-            0, -37, 14, 205, C.ink, false, false, 30);
-        node.on(Node.EventType.TOUCH_END, () => this.selectPet(id), this);
+        this.rect(g, 0, 0, 120, 106, C.white, 22);
+        this.petIcon(g, 0, -3, id, 1.25);
+        node.on(Node.EventType.TOUCH_START,
+            (event: EventTouch) => this.startGesture({ kind: 'summon', species: id }, null, event), this);
+        this.bindGesture(node);
+    }
+
+    private drawInfoCard(root: Node, g: Graphics): void {
+        const y = this.layout.top - 278;
+        this.rect(g, 0, y, 656, 152, C.white, 16);
+        this.infoTitle = this.text(root, '', -80, y + 46, 28, 450, C.ink, true, true, 42);
+        this.infoStats = this.text(root, '', 0, y + 6, 23, 616, C.ink, true, false, 34);
+        this.infoEffect = this.text(root, '', 0, y - 30, 23, 616, C.muted, true, false, 34);
+        this.infoMeta = this.text(root, '', 0, y - 61, 21, 616, C.muted, true, false, 30);
+        const action = this.button(root, '30 灵露', 246, y + 43, 132, 54, () => {
+            if (this.selected.kind !== 'pet') return;
+            const pet = this.session.pets.find(p => p.id === this.selectedPetId());
+            if (pet?.slot !== null && pet?.slot !== undefined)
+                this.handlePetAction(this.session.movePet(pet.id, pet.slot), false);
+        }, C.pale, C.ink);
+        this.infoAction = action.getComponentInChildren(Label);
+    }
+
+    private selectedPetId(): number | null { return this.selected.kind === 'pet' ? this.selected.id : null; }
+
+    private reserveOverlay(root: Node): void {
+        const modal = this.uiNode('ReserveSelection', root); modal.addComponent(BlockInputEvents);
+        const g = this.graphics(modal); g.fillColor = color(C.ink, 145);
+        g.rect(-360, -this.layout.top, 720, this.layout.height); g.fill();
+        this.rect(g, 0, 0, 656, 650, C.white, 20);
+        this.text(modal, '后备伙伴', 0, 268, 32, 600, C.ink, false, true, 60);
+        this.text(modal, '选择伙伴，再点击树桩免费部署', 0, 211, 24, 600, C.muted, false, false, 46);
+        this.session.pets.filter(p => p.slot === null).forEach((pet, i) => {
+            this.button(modal, `${PETS[pet.species].name} #${pet.id}\n免费部署`,
+                -204 + (i % 3) * 204, 130 - Math.floor(i / 3) * 104, 188, 86, () => {
+                    this.selected = { kind: 'pet', id: pet.id }; this.reservesOpen = false;
+                    this.clearFeedback(); this.renderScreen();
+                }, C.pale, C.ink);
+        });
+        this.button(modal, '返回战场', 0, -278, 560, 76,
+            () => { this.reservesOpen = false; this.renderScreen(); });
     }
 
     private updateHud(): void {
         if (!this.status || !this.counter || !this.session.current) return;
-        const phase = this.session.phase; const deployed = this.session.pets.filter(p => p.slot !== null).length;
-        const text = phase === 'prepare'
-            ? `已放置 ${deployed} / 2 · 选择${PETS[this.selected].name}后点击树桩；再次点击原位可撤下`
-            : phase === 'lost' ? '树心受损，本次远征结束。'
+        const phase = this.session.phase;
+        if (this.feedbackError === 'INSUFFICIENT_DEW' && this.session.dew >= ECONOMY.summonCost) this.clearFeedback();
+        const selected = this.selected;
+        const pet = selected.kind === 'pet' ? this.session.pets.find(p => p.id === selected.id) : undefined;
+        const action = this.selected.kind === 'summon'
+            ? `拖动${PETS[this.selected.species].name}头像到空树桩，或点击树桩召唤 · ${ECONOMY.summonCost} 灵露`
+            : pet ? `已选${PETS[pet.species].name} #${pet.id}：长按拖到空位搬迁，卡片可收回后备` : '请选择召唤卡片或场上宠物';
+        const text = phase === 'lost' ? '树心受损，本次远征结束。'
                 : phase === 'won' ? '这一站守住了，准备前往下一段旅程。'
-                    : this.paused ? '已暂停 · 可查看战场，开战后不能改变放置'
-                        : '防守中 · 橙色挥击是近战，蓝色星弹是远程';
+                    : this.session.paused ? '已暂停：灵露和战斗均冻结，请继续后再召唤或搬迁'
+                        : this.summonDrag?.active ? '范围随落点预览，拖到空树桩后松手放置'
+                            : this.feedback || action;
         const count = phase === 'prepare' ? `即将来袭  ${this.session.current.count} 只雾团`
             : `已击退 ${this.session.kills} / ${this.session.current.count} · 场上 ${this.session.enemies.length}`;
         if (text !== this.lastStatus) { this.status.string = text; this.lastStatus = text; }
         if (count !== this.lastCounter) { this.counter.string = count; this.lastCounter = count; }
+        const dewText = `灵露  ${this.session.dew}`;
+        if (this.dewLabel && this.dewLabel.string !== dewText) this.dewLabel.string = dewText;
+        const deployment = `场上 ${this.session.deployedCount} / ${ECONOMY.deploymentLimit} · 后备 ${this.session.pets.length - this.session.deployedCount}`;
+        if (this.deploymentLabel && this.deploymentLabel.string !== deployment) this.deploymentLabel.string = deployment;
+        const species = pet?.species ?? (selected.kind === 'summon' ? selected.species : 'cat');
+        const spec = PETS[species]; const damage = pet ? this.session.effectiveDamage(pet) : spec.damage;
+        const fmt = (n: number): string => Number(n.toFixed(1)).toString();
+        const boosted = pet && this.session.attackMultiplier(pet) > 1;
+        const stats = species === 'deer' ? `施法范围 ${spec.range} · 友军攻击力 +${spec.boost * 100}% · 不攻击`
+            : species === 'mushroom' ? `施法范围 ${spec.range} · 每 ${spec.interval} 秒 ${fmt(damage)} 伤害${boosted ? ' ↑' : ''}`
+                : `攻击 ${fmt(damage)}${boosted ? ' ↑40%' : ''} · 攻击间隔 ${spec.interval} 秒 · 范围 ${spec.range}`;
+        const effect = species === 'deer' ? '范围内友军获得增益，同类光环不叠加'
+            : species === 'mushroom' ? '孢子只伤害范围内敌人，离开范围即停止'
+                : species === 'cat' ? '挥爪攻击最接近摇篮树的单个敌人' : '发射星弹，追踪范围内最靠前的敌人';
+        const meta = pet ? `${pet.slot === null ? '后备' : '已部署'} #${pet.id} · 长按拖动，或点击空位调整`
+            : `未部署 · 中央为范围预览 · ${this.session.dew < ECONOMY.summonCost ? '灵露不足' : '拖动头像召唤'}`;
+        if (this.infoTitle) this.infoTitle.color = color(this.petTint(species));
+        if (this.infoStats) this.infoStats.color = color(boosted ? C.leaf : C.ink);
+        const labels: [Label | null, string][] = [
+            [this.infoTitle, `${spec.name} · ${spec.role}`], [this.infoStats, stats],
+            [this.infoEffect, effect], [this.infoMeta, meta], [this.infoAction, pet ? '收回' : '30 灵露'],
+        ];
+        for (const [label, value] of labels) if (label && label.string !== value) label.string = value;
     }
 
     private drawDynamic(g: Graphics): void {
-        g.clear(); const s = this.session;
-        if (s.phase === 'prepare') {
-            const pet = s.pets.find(p => p.id === this.selected);
-            if (pet && pet.slot !== null) {
-                const p = SLOTS[pet.slot]; const tint = pet.id === 'cat' ? C.orange : C.blue;
-                this.circle(g, p.x, p.y, PETS[pet.id].range, tint, 22);
-                g.strokeColor = color(tint, 120); g.lineWidth = 1.5; g.circle(p.x, p.y, PETS[pet.id].range); g.stroke();
+        g.clear(); this.dragVisual?.clear(); const s = this.session;
+        if (s.phase === 'prepare' || s.phase === 'battle') {
+            const selected = this.selected;
+            const pet = selected.kind === 'pet' ? s.pets.find(p => p.id === selected.id) : undefined;
+            const species = pet?.species ?? (selected.kind === 'summon' ? selected.species : 'cat');
+            const drag = this.summonDrag;
+            let p = pet?.slot !== null && pet?.slot !== undefined ? this.boardPoint(SLOTS[pet.slot])
+                : { x: 0, y: this.layout.arenaCenter };
+            if (drag?.active && drag.selection) {
+                const slot = portraitSlotAt(drag.point, this.layout);
+                p = slot === null ? drag.point : this.boardPoint(SLOTS[slot]);
+            }
+            const tint = this.petTint(species); const range = PETS[species].range * this.layout.scale;
+            this.circle(g, p.x, p.y, range, tint, 24);
+            g.strokeColor = color(tint, 150); g.lineWidth = 2; g.circle(p.x, p.y, range); g.stroke();
+            if (selected.kind === 'summon' && this.dragVisual) {
+                const x = -240 + PET_ORDER.indexOf(selected.species) * 160;
+                const outline = this.dragVisual; outline.strokeColor = color(tint); outline.lineWidth = 4;
+                outline.roundRect(x - 60, this.layout.bottom + 163, 120, 106, 22); outline.stroke();
             }
         }
         for (const enemy of s.enemies) {
-            const pulse = Math.sin(s.tick * 0.22 + enemy.id) * 2;
-            this.circle(g, enemy.x, enemy.y - 10, 16, C.roadEdge, 100);
-            this.circle(g, enemy.x, enemy.y + pulse, 17, C.enemy);
-            this.circle(g, enemy.x - 9, enemy.y + 8 + pulse, 9, C.enemy);
-            this.circle(g, enemy.x + 8, enemy.y + 8 + pulse, 10, C.enemy);
-            this.circle(g, enemy.x - 5, enemy.y + 3 + pulse, 2.3, C.enemyDark);
-            this.circle(g, enemy.x + 5, enemy.y + 3 + pulse, 2.3, C.enemyDark);
-            this.rect(g, enemy.x, enemy.y + 30, 34, 5, '#A7B59B', 2);
+            const p = this.boardPoint(enemy); const pulse = Math.sin(s.tick * 0.22 + enemy.id) * 2;
+            this.circle(g, p.x, p.y - 10, 16, C.roadEdge, 100);
+            this.circle(g, p.x, p.y + pulse, 17, C.enemy);
+            this.circle(g, p.x - 9, p.y + 8 + pulse, 9, C.enemy);
+            this.circle(g, p.x + 8, p.y + 8 + pulse, 10, C.enemy);
+            this.circle(g, p.x - 5, p.y + 3 + pulse, 2.3, C.enemyDark);
+            this.circle(g, p.x + 5, p.y + 3 + pulse, 2.3, C.enemyDark);
+            this.rect(g, p.x, p.y + 30, 34, 5, '#A7B59B', 2);
             const width = 34 * Math.max(0, enemy.hp / enemy.maxHp);
-            if (width > 0) this.rect(g, enemy.x - 17 + width / 2, enemy.y + 30, width, 5, C.green, 2);
+            if (width > 0) this.rect(g, p.x - 17 + width / 2, p.y + 30, width, 5, C.green, 2);
         }
         for (const pet of s.pets) {
             if (pet.slot === null) continue;
-            const p = SLOTS[pet.slot]; this.petIcon(g, p.x, p.y + 4, pet.id, 0.76);
+            const p = this.boardPoint(SLOTS[pet.slot]); this.petIcon(g, p.x, p.y + 4, pet.species, 0.95);
+            if (s.attackMultiplier(pet) > 1) {
+                g.strokeColor = color(C.leaf); g.lineWidth = 3; g.circle(p.x, p.y, 32); g.stroke();
+            }
+            if (s.phase === 'battle' && s.tick < pet.readyTick) {
+                g.strokeColor = color(C.muted); g.lineWidth = 3; g.circle(p.x, p.y, 33); g.stroke();
+            }
         }
-        for (const p of s.projectiles) {
+        for (const projectile of s.projectiles) {
+            const p = this.boardPoint(projectile);
             this.circle(g, p.x, p.y, 6, C.blue); this.circle(g, p.x - 1, p.y + 1, 2.5, C.white);
         }
-        for (const m of s.marks) {
-            if (m.kind === 'cat') {
-                for (let i = -1; i <= 1; i++) this.line(g, m.to.x - 10 + i * 5, m.to.y - 11, m.to.x + 5 + i * 5, m.to.y + 12, C.orange, 3);
-            } else {
-                g.strokeColor = color(C.blue, 160); g.lineWidth = 2; g.circle(m.to.x, m.to.y, 12); g.stroke();
+        for (const mark of s.marks) {
+            const p = this.boardPoint(mark.to);
+            if (mark.kind === 'cat') {
+                for (let i = -1; i <= 1; i++) this.line(g, p.x - 10 + i * 5, p.y - 11, p.x + 5 + i * 5, p.y + 12, C.orange, 3);
+            } else { g.strokeColor = color(mark.kind === 'mushroom' ? C.spore : C.blue, 160); g.lineWidth = 2; g.circle(p.x, p.y, mark.kind === 'mushroom' ? 20 : 12); g.stroke(); }
+        }
+        const drag = this.summonDrag;
+        if (drag?.active && drag.selection) {
+            const slot = portraitSlotAt(drag.point, this.layout);
+            const affordable = drag.selection.kind === 'pet' || (s.dew >= ECONOMY.summonCost
+                && s.deployedCount < ECONOMY.deploymentLimit && s.pets.length < ECONOMY.rosterLimit);
+            for (let i = 0; i < SLOTS.length; i++) {
+                const empty = !s.pets.some(p => p.slot === i);
+                if (!empty && slot !== i) continue;
+                const p = this.boardPoint(SLOTS[i]);
+                const valid = empty && affordable; const tint = valid ? C.green : C.red;
+                if (slot === i) {
+                    this.circle(g, p.x, p.y, 37, tint, 65);
+                }
+                g.strokeColor = color(tint, slot === i ? 255 : 150);
+                g.lineWidth = slot === i ? 5 : 2; g.circle(p.x, p.y, 36); g.stroke();
             }
+            const x = drag.point.x; const y = drag.point.y + 54;
+            const avatar = this.dragVisual ?? g;
+            this.circle(avatar, x, y, 35, C.white, 230);
+            this.petIcon(avatar, x, y, drag.species, 1);
         }
     }
 
     private petIcon(g: Graphics, x: number, y: number, id: PetId, scale: number): void {
-        const r = 27 * scale; const fill = id === 'cat' ? C.cat : C.rabbit;
+        const r = 27 * scale;
+        const fill = id === 'cat' ? C.cat : id === 'rabbit' ? C.rabbit : id === 'deer' ? C.deer : C.mushroom;
         if (id === 'cat') {
             g.fillColor = color(fill);
             g.moveTo(x - r, y + r * 0.4); g.lineTo(x - r * 0.8, y + r * 1.5); g.lineTo(x - r * 0.1, y + r * 0.7); g.close(); g.fill();
             g.moveTo(x + r, y + r * 0.4); g.lineTo(x + r * 0.8, y + r * 1.5); g.lineTo(x + r * 0.1, y + r * 0.7); g.close(); g.fill();
-        } else {
+        } else if (id === 'rabbit') {
             g.fillColor = color(fill);
             g.ellipse(x - r * 0.45, y + r, r * 0.27, r * 0.95); g.ellipse(x + r * 0.45, y + r, r * 0.27, r * 0.95); g.fill();
         }
+        if (id === 'deer') {
+            for (const sign of [-1, 1]) {
+                this.line(g, x + sign * r * 0.5, y + r * 0.6, x + sign * r * 0.7, y + r * 1.8, C.leaf, 4 * scale);
+                this.line(g, x + sign * r * 0.65, y + r * 1.3, x + sign * r * 1.1, y + r * 1.65, C.leaf, 3 * scale);
+                this.circle(g, x + sign * r * 0.7, y + r * 1.8, 5 * scale, C.leaf);
+            }
+        }
         this.circle(g, x, y, r, fill);
+        if (id === 'mushroom') {
+            g.fillColor = color(C.spore); g.ellipse(x, y + r * 0.6, r * 1.2, r * 0.65); g.fill();
+            this.circle(g, x - r * 0.5, y + r * 0.75, 4 * scale, C.white);
+            this.circle(g, x + r * 0.35, y + r * 0.9, 5 * scale, C.white);
+        }
         this.circle(g, x - r * 0.34, y + r * 0.1, 2.8 * scale, C.ink);
         this.circle(g, x + r * 0.34, y + r * 0.1, 2.8 * scale, C.ink);
-        this.circle(g, x, y - r * 0.2, 2.5 * scale, id === 'cat' ? C.orange : C.blue);
+        this.circle(g, x, y - r * 0.2, 2.5 * scale, this.petTint(id));
         this.line(g, x - r * 0.17, y - r * 0.4, x + r * 0.17, y - r * 0.4, C.ink, 1.4);
     }
     private tree(g: Graphics, x: number, y: number, scale: number): void {
@@ -319,17 +651,16 @@ export class MvpGame extends Component {
     }
     private resultOverlay(root: Node): void {
         const won = this.session.phase === 'won';
-        const modal = this.uiNode('Result', root);
-        const shade = this.graphics(modal); shade.fillColor = color(C.ink, 145); shade.rect(-640, -360, 1280, 720); shade.fill();
-        modal.on(Node.EventType.TOUCH_END, () => {}, this);
-        this.rect(shade, 0, 0, 560, 310, C.white, 20);
-        this.text(modal, won ? '这一站，守住了。' : '树心受伤了。', 0, 83, 34, 500, won ? C.green : C.red, false, true);
-        this.text(modal, won ? `击退 ${this.session.kills} 只雾团，两位伙伴可以继续出发。`
-            : '敌人突破了防线，树心 1 → 0。\n本次远征结束，换个位置再试一次。',
-            0, 5, 19, 490, C.muted, false, false, 85);
+        const modal = this.uiNode('Result', root); modal.addComponent(BlockInputEvents);
+        const shade = this.graphics(modal); shade.fillColor = color(C.ink, 145);
+        shade.rect(-360, -this.layout.top, 720, this.layout.height); shade.fill();
+        this.rect(shade, 0, 0, 640, 440, C.white, 20);
+        this.text(modal, won ? '这一站，守住了。' : '树心受伤了。', 0, 128, 36, 590, won ? C.green : C.red, false, true, 84);
+        this.text(modal, won ? `击退 ${this.session.kills} 只雾团\n带着萌宠小队，继续出发。`
+            : '敌人突破防线，树心 1 → 0。\n换个位置，再试一次。', 0, 20, 26, 580, C.muted, false, false, 110);
         this.button(modal, won ? (this.session.current?.children.length ? '继续选择路线' : '抵达净土') : '重新选择路线',
-            0, -94, 320, 52, () => {
-                if (won) { this.session.continueRoute(); this.renderScreen(); }
+            0, -134, 560, 84, () => {
+                if (won) { this.session.continueRoute(); this.reservesOpen = false; this.clearFeedback(); this.renderScreen(); }
                 else this.restart();
             });
     }

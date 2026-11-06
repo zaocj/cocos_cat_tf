@@ -5,6 +5,8 @@
   /* Add your custom configuration here. */
   "include": ["assets/**/*.ts"],
   "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "lib": ["ES2017", "DOM"],
     "skipLibCheck": true,
     "strict": false

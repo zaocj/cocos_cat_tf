@@ -1,0 +1,40 @@
+import { expect, test } from 'vitest';
+import { PATH, SLOTS, distance } from '../assets/scripts/domain/MvpSession.ts';
+import { isPortrait, portraitLayout, portraitSlotAt, toPortraitBoard } from '../assets/scripts/presentation/PortraitLayout.ts';
+
+test('only tall windows are playable; landscape and square windows are blocked', () => {
+    expect(isPortrait(390, 844)).toBe(true);
+    expect(isPortrait(360, 640)).toBe(true);
+    expect(isPortrait(844, 390)).toBe(false);
+    expect(isPortrait(720, 720)).toBe(false);
+});
+
+test('roads and 88-unit touch regions fit inside the portrait arena and select the intended stump', () => {
+    for (const height of [1280, 1440, 1558, 1700]) {
+        const layout = portraitLayout(height);
+        for (const p of [...PATH, ...SLOTS]) {
+            const q = toPortraitBoard(p, layout);
+            expect(q.x - 44 >= -328 && q.x + 44 <= 328).toBeTruthy();
+            expect(q.y - 44 >= layout.arenaBottom && q.y + 44 <= layout.arenaTop).toBeTruthy();
+        }
+        expect(layout.arenaBottom > layout.bottom + 269, 'arena must not overlap the summon dock').toBeTruthy();
+        SLOTS.forEach((slot, i) => expect(portraitSlotAt(toPortraitBoard(slot, layout), layout)).toBe(i));
+        const a = toPortraitBoard(SLOTS[1], layout); const b = toPortraitBoard(SLOTS[2], layout);
+        expect(portraitSlotAt({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 }, layout)).toBe(2);
+        expect(portraitSlotAt({ x: 355, y: 0 }, layout)).toBe(null);
+    }
+});
+
+test('portrait projection preserves attack distances uniformly and puts the entrance above the base', () => {
+    const layout = portraitLayout(1558);
+    for (const slot of SLOTS) for (const p of PATH) {
+        expect(Math.abs(distance(toPortraitBoard(slot, layout), toPortraitBoard(p, layout))
+            - distance(slot, p) * layout.scale) < 1e-8).toBeTruthy();
+    }
+    const entry = toPortraitBoard(PATH[0], layout); const base = toPortraitBoard(PATH[PATH.length - 1], layout);
+    expect(entry.x < 0 && entry.y > layout.arenaCenter).toBeTruthy();
+    expect(base.x > 0 && base.y < layout.arenaCenter).toBeTruthy();
+    expect(SLOTS.length).toBe(16);
+    for (let i = 0; i < SLOTS.length; i++) for (let j = i + 1; j < SLOTS.length; j++)
+        expect(distance(toPortraitBoard(SLOTS[i], layout), toPortraitBoard(SLOTS[j], layout)) >= 88).toBeTruthy();
+});
