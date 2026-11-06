@@ -28,4 +28,19 @@ export function waveFor(depth: number, count: number, encounter: EncounterKind):
     return wave;
 }
 
-export const ENEMY_BALANCE = { startHp: 96, hpPerDepth: 7, spawnGap: 2.2, bossGap: 4.5, regenDelayTicks: 60, bossRageSpeed: 1.25 } as const;
+export const ENEMY_BALANCE = {
+    startHp: 96, hpGrowth: 1.2, hpJitter: 8,
+    startSpeed: 65, speedPerDepth: 2, speedJitter: 1,
+    spawnGap: 2.2, gapReductionPerDepth: 0.06, minSpawnGap: 1.5,
+    bossGap: 4.5, regenDelayTicks: 60, bossRageSpeed: 1.25,
+} as const;
+
+/** Depth is the expedition layer (including rest), not the number of completed fights. */
+export function enemyTier(depth: number): { hp: number; speed: number; spawnGap: number } {
+    const d = Math.max(0, Math.floor(depth));
+    return {
+        hp: Math.round(ENEMY_BALANCE.startHp * ENEMY_BALANCE.hpGrowth ** d),
+        speed: ENEMY_BALANCE.startSpeed + ENEMY_BALANCE.speedPerDepth * d,
+        spawnGap: Math.max(ENEMY_BALANCE.minSpawnGap, Number((ENEMY_BALANCE.spawnGap - ENEMY_BALANCE.gapReductionPerDepth * d).toFixed(2))),
+    };
+}

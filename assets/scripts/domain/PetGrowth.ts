@@ -10,6 +10,9 @@ export const PET_GROWTH = {
     powerDamage: 2, powerInterval: 1.5, powerAura: 1.6, powerAuraRange: 0.7,
     resonanceEvery: 3, clawRadius: 90, clawDamage: 0.5,
     extraBoltDamage: 0.7, sporeRange: 1.35, auraSpeed: 1.2,
+    vineIntervalByStar: [7, 6, 5], vineLifetime: 2,
+    vineLongLife: 2, vineLongInterval: 1.5, vineQuickInterval: 0.65, vineQuickLife: 0.75,
+    chainTargets: 3, chainExtraTargets: 2, chainRange: 115, chainDecay: 0.7,
 } as const;
 
 export interface MutationCard { id: MutationId; name: string; detail: string; summary: string }
@@ -20,5 +23,8 @@ const cards: Record<PetId, readonly MutationCard[]> = {
     mushroom: [power, { id: 'resonance', name: '蔓延孢雾', summary: '每第3次脉冲范围+35%', detail: '每第 3 次孢子脉冲，施法范围扩大 35%。' }],
     deer: [{ id: 'power', name: '浓露异变', summary: '助威×1.6，范围×0.7', detail: '助威强度提高 60%，施法范围缩小 30%。' },
         { id: 'resonance', name: '灵铃共鸣', summary: '友军攻速+20%', detail: '助威同时使圈内友军攻速提高 20%，同类效果不叠加。' }],
+    vine: [{ id: 'power', name: '缠生异变', summary: '藤蔓存活×2，间隔×1.5', detail: '藤蔓存活时间翻倍，施放间隔增加 50%。' },
+        { id: 'resonance', name: '迅芽异变', summary: '施放间隔×0.65，存活×0.75', detail: '施放间隔缩短 35%，藤蔓存活时间缩短 25%。' }],
+    sparrow: [power, { id: 'resonance', name: '雷羽连鸣', summary: '每第3击多连锁2只敌人', detail: '每第 3 次闪电可额外连锁 2 只敌人，仍逐跳衰减。' }],
 };
 export function mutationCards(species: PetId): readonly MutationCard[] { return cards[species]; }

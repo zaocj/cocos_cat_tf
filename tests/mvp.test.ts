@@ -1,5 +1,6 @@
+import { developReferenceSquad } from './support/ReferenceSquad.ts';
 import { expect, test } from 'vitest';
-import { ECONOMY, MvpSession, PETS, PetId, LOCKED_SLOTS, SLOTS, STEP, PATH, PATH_LENGTH, pointOnPath } from '../assets/scripts/domain/MvpSession.ts';
+import { ECONOMY, MvpSession, PET_ORDER, PETS, PetId, LOCKED_SLOTS, SLOTS, STEP, PATH, PATH_LENGTH, pointOnPath } from '../assets/scripts/domain/MvpSession.ts';
 
 function advance(game: MvpSession, seconds: number): void {
     for (let i = 0; i < Math.round(seconds / STEP) && game.phase === 'battle'; i++) game.step();
@@ -11,7 +12,7 @@ function summon(game: MvpSession, species: PetId, slot: number) {
 }
 
 test('route starts with two choices and rejects locked or already entered nodes', () => {
-    const game = new MvpSession(123);
+    const game = new MvpSession(123, { carriedPets: PET_ORDER });
     expect(game.available).toHaveLength(2);
     const choice = game.available[0];
     expect(game.chooseNode(game.route[game.route.length - 1].id)).toBe(false);
@@ -24,7 +25,7 @@ test('route starts with two choices and rejects locked or already entered nodes'
 });
 
 test('60 starting dew pays for two distinct same-species pets; rejected summons are atomic', () => {
-    const game = new MvpSession();
+    const game = new MvpSession(1, { carriedPets: PET_ORDER });
     expect(game.dew).toBe(60); expect(game.pets.length).toBe(0);
     expect(game.summonPet('cat', 0)).toStrictEqual({ ok: false, reason: 'WRONG_PHASE' });
     game.chooseNode(game.available[0].id);
@@ -38,7 +39,7 @@ test('60 starting dew pays for two distinct same-species pets; rejected summons 
 });
 
 test('time grants no dew in preparation, combat or pause', () => {
-    const game = new MvpSession(); game.step(); expect(game.dew).toBe(60);
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.step(); expect(game.dew).toBe(60);
     game.chooseNode(game.available[0].id); game.step(); expect(game.tick).toBe(0);
     game.startBattle(); advance(game, 29 * STEP); expect(game.dew).toBe(60);
     game.step(); expect(game.dew).toBe(60);
@@ -49,14 +50,14 @@ test('time grants no dew in preparation, combat or pause', () => {
 });
 
 test('a kill awards exactly 6 dew and cannot be collected again', () => {
-    const game = new MvpSession(); game.chooseNode(game.available[0].id); summon(game, 'cat', 0); game.startBattle();
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id); summon(game, 'cat', 0); game.startBattle();
     game.enemies = [{ id: 100, kind: 'mist', lastDamageTick: 0, distance: 210, ...pointOnPath(210), hp: 24, maxHp: 24 }];
     game.step(); expect(game.kills).toBe(1); expect(game.dew).toBe(36);
     game.step(); expect(game.kills).toBe(1); expect(game.dew).toBe(36);
 });
 
 test('earned dew can summon another pet during combat', () => {
-    const game = new MvpSession(); game.chooseNode(game.available[0].id);
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id);
     summon(game, 'cat', 0); summon(game, 'rabbit', 4); game.startBattle();
     game.enemies = Array.from({ length: 5 }, (_, i) => ({ id: 100 + i, kind: 'mist' as const,
         lastDamageTick: 0, distance: 210, ...pointOnPath(210), hp: 1, maxHp: 96 }));
@@ -67,7 +68,7 @@ test('earned dew can summon another pet during combat', () => {
 });
 
 test('moving and swapping cost nothing; combat relocation pauses attacks for one second', () => {
-    const game = new MvpSession(); game.chooseNode(game.available[0].id);
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id);
     game.dew += ECONOMY.cultivateCost; expect(game.cultivate(1).ok).toBe(true);
     const cat = summon(game, 'cat', 0); const rabbit = summon(game, 'rabbit', 1);
     expect(game.movePet(cat.id, 1).ok).toBe(true);
@@ -82,13 +83,13 @@ test('moving and swapping cost nothing; combat relocation pauses attacks for one
 });
 
 test('recall grants no refund; redeploy and reserve swap do not charge another summon', () => {
-    const game = new MvpSession(); game.chooseNode(game.available[0].id); const cat = summon(game, 'cat', 0);
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id); const cat = summon(game, 'cat', 0);
     game.movePet(cat.id, 0); expect(cat.slot).toBe(null); expect(game.dew).toBe(30);
     game.movePet(cat.id, 2); expect(cat.slot).toBe(2); expect(game.dew).toBe(30);
 });
 
 test('deployment follows open stumps rather than a six-pet cap, including reserve swaps', () => {
-    const game = new MvpSession(); game.chooseNode(game.available[0].id); game.dew = 300;
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id); game.dew = 300;
     for (const slot of game.unlockedSlots) summon(game, 'cat', slot);
     expect(game.deployedCount).toBe(8); const before = game.dew;
     const reserve = game.pets[0]; game.movePet(reserve.id, 0);
@@ -99,7 +100,7 @@ test('deployment follows open stumps rather than a six-pet cap, including reserv
 });
 
 test('the roster can hold every stump, and recalling pets cannot bypass that capacity', () => {
-    const game = new MvpSession(); game.chooseNode(game.available[0].id); game.dew = 1000;
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id); game.dew = 1000;
     for (const slot of LOCKED_SLOTS) expect(game.cultivate(slot).ok).toBe(true);
     for (let slot = 0; slot < SLOTS.length; slot++) summon(game, 'cat', slot);
     expect(game.deployedCount).toBe(16);
@@ -110,7 +111,7 @@ test('the roster can hold every stump, and recalling pets cannot bypass that cap
 });
 
 test('zero tree health ends the game; further steps and purchases cannot generate or consume dew', () => {
-    const game = new MvpSession(); game.chooseNode(game.available[0].id); game.startBattle(); advance(game, 70);
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id); game.startBattle(); advance(game, 70);
     expect(game.heart).toBe(0); expect(game.phase).toBe('lost');
     const tick = game.tick; const dew = game.dew; advance(game, 10); game.step();
     expect(game.tick).toBe(tick); expect(game.dew).toBe(dew);
@@ -120,15 +121,15 @@ test('zero tree health ends the game; further steps and purchases cannot generat
 
 test('ranged pet fires tracking projectiles; melee deals damage without a projectile', () => {
     expect(PETS.rabbit.range > PETS.cat.range * 2).toBeTruthy();
-    const ranged = new MvpSession(); ranged.chooseNode(ranged.available[0].id); summon(ranged, 'rabbit', 0); ranged.startBattle(); advance(ranged, 1.05);
+    const ranged = new MvpSession(1, { carriedPets: PET_ORDER }); ranged.chooseNode(ranged.available[0].id); summon(ranged, 'rabbit', 0); ranged.startBattle(); advance(ranged, 1.05);
     expect(ranged.projectiles.length > 0).toBeTruthy();
-    const melee = new MvpSession(); melee.chooseNode(melee.available[0].id); summon(melee, 'cat', 0); melee.startBattle(); advance(melee, 2.5);
+    const melee = new MvpSession(1, { carriedPets: PET_ORDER }); melee.chooseNode(melee.available[0].id); summon(melee, 'cat', 0); melee.startBattle(); advance(melee, 2.5);
     expect(melee.projectiles.length).toBe(0);
     expect(melee.marks.length > 0 || melee.kills > 0 || melee.enemies.some(e => e.hp < e.maxHp)).toBeTruthy();
 });
 
 test('arriving at the base takes priority over a lethal projectile in the same tick', () => {
-    const game = new MvpSession(); game.chooseNode(game.available[0].id); game.startBattle();
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id); game.startBattle();
     game.spawned = 6; game.heart = 1;
     game.enemies = [{ id: 100, kind: 'mist', lastDamageTick: 0, distance: PATH_LENGTH - 1, ...pointOnPath(PATH_LENGTH - 1), hp: 12, maxHp: 30 }];
     game.projectiles = [{ id: 101, targetId: 100, ...pointOnPath(PATH_LENGTH), damage: 12 }]; game.step();
@@ -136,25 +137,19 @@ test('arriving at the base takes priority over a lethal projectile in the same t
 });
 
 test('pets, tree health and remaining dew persist across battles and rest nodes', () => {
-    const game = new MvpSession(123); let previousIds: number[] = [];
-    const squad: { species: PetId; slot: number }[] = [
-        { species: 'cat', slot: 0 }, { species: 'rabbit', slot: 4 }, { species: 'deer', slot: 5 },
-        { species: 'mushroom', slot: 9 }, { species: 'rabbit', slot: 6 }, { species: 'cat', slot: 8 },
-    ];
+    const game = new MvpSession(123, { carriedPets: PET_ORDER }); let previousIds: number[] = [];
     for (let depth = 0; depth < game.routeDepths; depth++) {
         const id = game.available[0].id; const before = game.dew;
         expect(game.chooseNode(id)).toBe(true); expect(game.dew).toBe(before);
         expect(game.pets.map(p => p.id)).toStrictEqual(previousIds);
+        if (game.phase === 'sanctuary') { expect(game.leaveSanctuary()).toBe(true); continue; }
         if (game.phase === 'rest') {
             expect(game.takeRest('dew')).toBe(true); expect(game.dew).toBe(before + ECONOMY.restDew); continue;
         }
-        const buy = (): void => {
-            while (game.pets.length < squad.length && game.dew >= ECONOMY.summonCost) {
-                const next = squad[game.pets.length]; summon(game, next.species, next.slot);
-            }
-        };
-        buy(); game.startBattle();
-        for (let tick = 0; tick < 90 / STEP && game.phase === 'battle'; tick++) { buy(); game.step(); }
+        developReferenceSquad(game); game.startBattle();
+        for (let tick = 0; tick < 120 / STEP && game.phase === 'battle'; tick++) {
+            if (tick % 30 === 0) developReferenceSquad(game); game.step();
+        }
         previousIds = game.pets.map(p => p.id);
         expect(game.phase, `${id}: ${game.enemies.map(e => e.kind + '=' + Math.round(e.hp)).join(',')}`).toBe('won');
         expect(game.heart).toBe(game.maxHeart);
@@ -170,7 +165,7 @@ test('path clamps at shared endpoint and traverses multiple segments correctly',
 });
 
 function auraArena(): MvpSession {
-    const game = new MvpSession(); game.chooseNode(game.available[0].id); game.dew = 300;
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id); game.dew = 600;
     for (const slot of LOCKED_SLOTS) game.cultivate(slot);
     if (!game.current) throw new Error('Test encounter was not initialized');
     game.current = { ...game.current, speed: 0 };

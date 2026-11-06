@@ -52,14 +52,14 @@ export class RouteMapView extends Component {
         }
         for (const node of route) {
             const open = this.available.has(node.id); const done = walked.has(node.id);
-            const encounterColor = node.kind === 'rest' ? '#286A9C' : node.encounter === 'boss' ? '#9B4963' : node.encounter === 'elite' ? '#A66B42' : '#337354';
+            const encounterColor = node.kind === 'sanctuary' ? '#87539D' : node.kind === 'rest' ? '#286A9C' : node.encounter === 'boss' ? '#9B4963' : node.encounter === 'elite' ? '#A66B42' : '#337354';
             g.fillColor = tint(done ? '#337354' : open ? '#FCFDF7' : '#C6D4BD');
             g.circle(node.x, node.y, 40); g.fill();
             if (open) { g.strokeColor = tint(encounterColor); g.lineWidth = 3; g.circle(node.x, node.y, 43); g.stroke(); }
             this.label(content, done ? '✓' : `${node.depth + 1}`, node.x, node.y, 28, 80, done ? '#FCFDF7' : encounterColor);
             this.label(content, node.name, node.x, node.y - 66, 24, 158, '#234235');
             const type = node.encounter === 'boss' ? 'BOSS' : node.encounter === 'elite' ? '精英' : '混合';
-            this.label(content, done ? '已完成' : node.kind === 'rest' ? '灵露 / 树心' : `${type}·${node.count}只`, node.x, node.y - 99, 19, 132, node.kind !== 'rest' && node.encounter === 'normal' ? '#526A58' : encounterColor);
+            this.label(content, done ? '已完成' : node.kind === 'sanctuary' ? '购宠 / 放生' : node.kind === 'rest' ? '灵露 / 树心' : `${type}·${node.count}只`, node.x, node.y - 99, 19, 132, node.kind === 'battle' && node.encounter === 'normal' ? '#526A58' : encounterColor);
         }
         this.apply();
     }

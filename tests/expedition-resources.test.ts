@@ -7,6 +7,7 @@ function restStop(): MvpSession {
     // Complete the incoming edges to exercise the real route and choice guards.
     while (game.phase !== 'rest') {
         expect(game.chooseNode(game.available[0].id)).toBe(true);
+        if (game.phase === 'sanctuary') game.leaveSanctuary();
         if (game.phase === 'prepare') { game.phase = 'won'; game.continueRoute(); }
     }
     return game;
@@ -17,7 +18,7 @@ test('all paths encounter a rest stop, while optional rests share layers with ba
         const route = generateRoute(seed);
         expect(route.filter(n => n.depth === 3).every(n => n.kind === 'rest')).toBe(true);
         expect(route.filter(n => n.depth === 1).some(n => n.kind === 'rest')).toBe(true);
-        expect(route.filter(n => n.depth === 1).some(n => n.kind === 'battle')).toBe(true);
+        expect(route.filter(n => n.depth === 1).some(n => n.kind === 'sanctuary')).toBe(true);
         for (const node of route.filter(n => n.kind === 'rest')) {
             expect(node.wave).toEqual([]); expect(node.count).toBe(0); expect(node.children.length).toBeGreaterThan(0);
         }

@@ -1,9 +1,9 @@
 import { expect, test } from 'vitest';
-import { MvpSession, PetId, PetState, EnemyState, pointOnPath, STEP } from '../assets/scripts/domain/MvpSession.ts';
+import { MvpSession, PET_ORDER, PetId, PetState, EnemyState, pointOnPath, STEP } from '../assets/scripts/domain/MvpSession.ts';
 import { PET_GROWTH, mutationCards, MutationId } from '../assets/scripts/domain/PetGrowth.ts';
 
 function prepare(chance = 0, seed = 123): MvpSession {
-    const g = new MvpSession(seed, { mutationChance: chance }); g.chooseNode(g.available[0].id); g.dew = 1000; return g;
+    const g = new MvpSession(seed, { mutationChance: chance, carriedPets: PET_ORDER }); g.chooseNode(g.available[0].id); g.dew = 1000; return g;
 }
 function summon(g: MvpSession, species: PetId, slot: number): PetState {
     const r = g.summonPet(species, slot); if (!r.ok) throw new Error('Could not summon'); return r.pet;
@@ -87,7 +87,7 @@ test('background pause survives a pending choice and inherited mutations are rep
 });
 
 test('chance is configurable, defaults to 50 percent, reproduces by seed, and is independent of map generation', () => {
-    expect(new MvpSession().mutationChance).toBe(0.5); expect(PET_GROWTH.mutationChance).toBe(0.5);
+    expect(new MvpSession(1, { carriedPets: PET_ORDER }).mutationChance).toBe(0.5); expect(PET_GROWTH.mutationChance).toBe(0.5);
     expect(() => new MvpSession(1, { mutationChance: 2 })).toThrow(RangeError);
     expect(() => new MvpSession(1, { mutationChance: NaN })).toThrow(RangeError);
     let mutations = 0;

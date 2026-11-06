@@ -12,12 +12,14 @@ test('only tall windows are playable; landscape and square windows are blocked',
 test('roads and 88-unit touch regions fit inside the portrait arena and select the intended stump', () => {
     for (const height of [1280, 1440, 1558, 1700]) {
         const layout = portraitLayout(height);
+        expect(layout.arenaCenter + layout.arenaHeight / 2).toBe(layout.arenaTop);
+        expect(layout.arenaCenter - layout.arenaHeight / 2).toBe(layout.arenaBottom);
         for (const p of [...PATH, ...SLOTS]) {
             const q = toPortraitBoard(p, layout);
             expect(q.x - 44 >= -328 && q.x + 44 <= 328).toBeTruthy();
             expect(q.y - 44 >= layout.arenaBottom && q.y + 44 <= layout.arenaTop).toBeTruthy();
         }
-        expect(layout.arenaBottom > layout.bottom + 269, 'arena must not overlap the summon dock').toBeTruthy();
+        expect(layout.arenaBottom > layout.bottom + 253, 'arena must not overlap the compact summon dock').toBeTruthy();
         SLOTS.forEach((slot, i) => expect(portraitSlotAt(toPortraitBoard(slot, layout), layout)).toBe(i));
         const a = toPortraitBoard(SLOTS[1], layout); const b = toPortraitBoard(SLOTS[2], layout);
         expect(portraitSlotAt({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 }, layout)).toBe(2);
@@ -25,11 +27,11 @@ test('roads and 88-unit touch regions fit inside the portrait arena and select t
     }
 });
 
-test('portrait projection preserves attack distances uniformly and puts the entrance above the base', () => {
+test('expanded portrait projection and elliptical ranges preserve logical attack distances', () => {
     const layout = portraitLayout(1558);
     for (const slot of SLOTS) for (const p of PATH) {
-        expect(Math.abs(distance(toPortraitBoard(slot, layout), toPortraitBoard(p, layout))
-            - distance(slot, p) * layout.scale) < 1e-8).toBeTruthy();
+        const a = toPortraitBoard(slot, layout); const b = toPortraitBoard(p, layout);
+        expect(Math.hypot((a.x - b.x) / layout.scale, (a.y - b.y) / layout.scaleY)).toBeCloseTo(distance(slot, p), 8);
     }
     const entry = toPortraitBoard(PATH[0], layout); const base = toPortraitBoard(PATH[PATH.length - 1], layout);
     expect(entry.x < 0 && entry.y > layout.arenaCenter).toBeTruthy();

@@ -5,7 +5,7 @@ export const PORTRAIT_WIDTH = 720;
 export const PORTRAIT_MIN_HEIGHT = 1280;
 export interface PortraitLayout {
     height: number; top: number; bottom: number;
-    arenaTop: number; arenaBottom: number; arenaHeight: number; arenaCenter: number; scale: number;
+    arenaTop: number; arenaBottom: number; arenaHeight: number; arenaCenter: number; boardCenter: number; scale: number; scaleY: number;
 }
 
 export function isPortrait(width: number, height: number): boolean { return height > width; }
@@ -13,15 +13,17 @@ export function isPortrait(width: number, height: number): boolean { return heig
 export function portraitLayout(visibleHeight: number): PortraitLayout {
     const height = Math.max(PORTRAIT_MIN_HEIGHT, visibleHeight);
     const top = height / 2; const bottom = -top;
-    const arenaTop = top - 370; const arenaBottom = bottom + 340;
+    const arenaTop = top - 132; const arenaBottom = bottom + 260;
     const arenaHeight = arenaTop - arenaBottom;
+    const arenaCenter = (arenaTop + arenaBottom) / 2;
     return { height, top, bottom, arenaTop, arenaBottom, arenaHeight,
-        arenaCenter: (arenaTop + arenaBottom) / 2, scale: Math.min(1.08, (arenaHeight - 88) / 600) };
+        // Leave room above the entrance for elite/BOSS labels, and below the tree for its trunk.
+        arenaCenter, boardCenter: arenaCenter - 26, scale: 1.08, scaleY: (arenaHeight - 156) / 600 };
 }
 
-/** Uniformly project portrait logical coordinates; range, speed and targeting share this transform. */
+/** Fill the available battlefield; logical circles are displayed as ellipses using these same axes. */
 export function toPortraitBoard(point: Point, layout: PortraitLayout): Point {
-    return { x: point.x * layout.scale, y: layout.arenaCenter + point.y * layout.scale };
+    return { x: point.x * layout.scale, y: layout.boardCenter + point.y * layout.scaleY };
 }
 
 /** Resolve nearby touch regions by distance, rather than letting the last overlapping node win. */

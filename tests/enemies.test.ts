@@ -1,13 +1,14 @@
+import { developReferenceSquad } from './support/ReferenceSquad.ts';
 import { expect, test } from 'vitest';
-import { ENEMIES, EnemyKind } from '../assets/scripts/domain/EnemyConfig.ts';
+import { ENEMIES, EnemyKind, enemyTier } from '../assets/scripts/domain/EnemyConfig.ts';
 import { generateRoute } from '../assets/scripts/domain/ExpeditionRoute.ts';
-import { EnemyState, MvpSession, PATH, PETS, PetId, STEP, pointOnPath } from '../assets/scripts/domain/MvpSession.ts';
+import { EnemyState, MvpSession, PET_ORDER, PATH, PETS, STEP, pointOnPath } from '../assets/scripts/domain/MvpSession.ts';
 
 function fixture(kind: EnemyKind, hp = 200, travel = 210): EnemyState {
     return { id: 1000, kind, hp, maxHp: hp, distance: travel, ...pointOnPath(travel), lastDamageTick: 0 };
 }
 function arena(enemy: EnemyState): MvpSession {
-    const game = new MvpSession(123); game.chooseNode(game.available[0].id);
+    const game = new MvpSession(123, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id);
     if (!game.current) throw new Error('Missing encounter');
     game.spawned = game.current.count; game.enemies = [enemy]; game.startBattle();
     return game;
@@ -15,7 +16,7 @@ function arena(enemy: EnemyState): MvpSession {
 function advance(game: MvpSession, ticks: number): void { for (let i = 0; i < ticks; i++) game.step(); }
 
 test('starting mist has 96 HP and survives a regular attack instead of dying immediately', () => {
-    const game = new MvpSession(); game.chooseNode(game.available[0].id); game.startBattle(); advance(game, 30);
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id); game.startBattle(); advance(game, 30);
     const mist = game.enemies[0]; expect(mist.kind).toBe('mist'); expect(mist.maxHp).toBe(96);
     game.projectiles.push({ id: 2000, targetId: mist.id, x: mist.x, y: mist.y, damage: PETS.cat.damage });
     game.step(); expect(mist.hp).toBe(72); expect(game.kills).toBe(0);
@@ -69,7 +70,7 @@ test('boss half-health enrage changes speed by 25 percent and pause freezes it',
 
 test('every generated path includes elite and boss checkpoints with a complete pre-generated wave', () => {
     for (let seed = 0; seed < 50; seed++) for (const node of generateRoute(seed)) {
-        expect(node.wave).toHaveLength(node.count); expect(node.hp).toBeGreaterThanOrEqual(96 + node.depth * 7);
+        expect(node.wave).toHaveLength(node.count); expect(node.hp).toBeGreaterThanOrEqual(enemyTier(node.depth).hp);
         if (node.depth === 2 || node.depth === 8) expect(node.wave).toContain('elite');
         if (node.depth === 5 || node.depth === 11) {
             expect(node.encounter).toBe('boss'); expect(node.wave.filter(k => k === 'boss')).toHaveLength(1);
@@ -78,34 +79,27 @@ test('every generated path includes elite and boss checkpoints with a complete p
     }
 });
 
-test('a planned mixed squad can finish 100 seeded expeditions with normal earned income', () => {
-    const squad: { species: PetId; slot: number }[] = [
-        { species: 'cat', slot: 0 }, { species: 'rabbit', slot: 4 }, { species: 'deer', slot: 5 },
-        { species: 'mushroom', slot: 9 }, { species: 'rabbit', slot: 6 }, { species: 'cat', slot: 8 },
-    ];
-    for (let seed = 0; seed < 100; seed++) {
-        const game = new MvpSession(seed);
+test('an evolving mixed squad finishes 100 seeds both without mutation and with normal 50 percent mutation', () => {
+    for (const mutationChance of [0, 0.5]) for (let seed = 0; seed < 100; seed++) {
+        const game = new MvpSession(seed, { mutationChance, carriedPets: PET_ORDER });
         for (let depth = 0; depth < game.routeDepths; depth++) {
             const node = game.available[seed % 2 ? game.available.length - 1 : 0];
             const carried = game.dew; expect(game.chooseNode(node.id)).toBe(true); expect(game.dew).toBe(carried);
             if (game.phase === 'rest') { expect(game.takeRest('dew')).toBe(true); continue; }
-            const buy = (): void => {
-                while (game.pets.length < squad.length && game.dew >= 30) {
-                    const next = squad[game.pets.length]; expect(game.summonPet(next.species, next.slot).ok).toBe(true);
-                }
-            };
-            buy(); game.startBattle();
-            for (let tick = 0; tick < 90 / STEP && game.phase === 'battle'; tick++) {
-                if (tick % 30 === 0) buy(); game.step();
+            if (game.phase === 'sanctuary') { expect(game.leaveSanctuary()).toBe(true); continue; }
+            developReferenceSquad(game); game.startBattle();
+            for (let tick = 0; tick < 120 / STEP && game.phase === 'battle'; tick++) {
+                if (tick % 30 === 0) developReferenceSquad(game); game.step();
             }
-            expect(game.phase, `seed ${seed}, depth ${depth}, ${game.enemies.map(e => e.kind + ':' + Math.ceil(e.hp))}`).toBe('won');
+            expect(game.phase, `chance ${mutationChance}, seed ${seed}, depth ${depth}, ${game.enemies.map(e => e.kind + ':' + Math.ceil(e.hp))}`).toBe('won');
             game.continueRoute();
         }
         expect(game.phase).toBe('complete');
+        expect(game.pets.every(p => p.star >= 2)).toBe(true);
     }
 });
 
 test('one cat alone leaks enemies without adding defenses', () => {
-    const game = new MvpSession(); game.chooseNode(game.available[0].id); game.summonPet('cat', 0); game.startBattle();
+    const game = new MvpSession(1, { carriedPets: PET_ORDER }); game.chooseNode(game.available[0].id); game.summonPet('cat', 0); game.startBattle();
     advance(game, 90 / STEP); expect(game.heart).toBeLessThan(game.maxHeart); expect(game.leaked).toBeGreaterThan(0);
 });
