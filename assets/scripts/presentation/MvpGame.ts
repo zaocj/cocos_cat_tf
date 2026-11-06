@@ -5,12 +5,14 @@ import {
 import { ActionError, ECONOMY, MvpSession, PATH, PETS, PET_ORDER, PetActionResult, PetId, ROUTE, SLOTS, STEP } from '../domain/MvpSession';
 import { isPortrait, PortraitLayout, portraitLayout, portraitSlotAt, PORTRAIT_MIN_HEIGHT, PORTRAIT_WIDTH, toPortraitBoard } from './PortraitLayout';
 
+import { GameToast } from './GameToast';
+
 const { ccclass } = _decorator;
 type Selection = { kind: 'summon'; species: PetId } | { kind: 'pet'; id: number };
 interface SummonDrag {
     touchId: number; species: PetId;
     start: { x: number; y: number }; point: { x: number; y: number }; moved: boolean;
-    selection: Selection | null; originSlot: number | null; elapsed: number; active: boolean; startedAt: number;
+    selection: Selection | null; originSlot: number | null; elapsed: number; active: boolean; startedAt: number; warnedInsufficientDew: boolean;
 }
 const C = {
     bg: '#EDF3E7', ink: '#234235', muted: '#526A58', green: '#337354', pale: '#D9E6D0',
@@ -30,9 +32,12 @@ export class MvpGame extends Component {
     private screenRoot: Node | null = null;
     private dynamic: Graphics | null = null;
     private dragVisual: Graphics | null = null;
+    private toast: GameToast | null = null;
+    private summonMasks = new Map<PetId, Node>();
     private status: Label | null = null;
     private counter: Label | null = null;
     private selected: Selection = { kind: 'summon', species: 'cat' };
+    private inspectedPetId: number | null = null;
     private dewLabel: Label | null = null;
     private deploymentLabel: Label | null = null;
     private infoTitle: Label | null = null;
@@ -60,13 +65,15 @@ export class MvpGame extends Component {
         if (this.screenRoot) this.onViewportResize();
     }
     onDisable(): void {
+        this.toast?.dismiss();
+        this.inspectedPetId = null;
         this.summonDrag = null;
         input.off(Input.EventType.KEY_DOWN, this.onKey, this);
         game.off(Game.EVENT_HIDE, this.onHide, this);
         screen.off('window-resize', this.onViewportResize, this);
         if (this.orientationGate) this.orientationGate.style.display = 'none';
     }
-    onDestroy(): void { this.orientationGate?.remove(); }
+    onDestroy(): void { this.toast?.node?.destroy(); this.toast = null; this.orientationGate?.remove(); }
     start(): void {
         profiler.hideStats();
         this.onViewportResize();
@@ -85,10 +92,13 @@ export class MvpGame extends Component {
                 if (this.session.phase !== 'battle') { this.accumulator = 0; this.renderScreen(); break; }
             }
         }
+        this.warnIfSummonUnaffordable();
         if (this.dynamic) this.drawDynamic(this.dynamic);
         this.updateHud();
     }
     private onHide(): void {
+        this.toast?.dismiss();
+        this.inspectedPetId = null;
         this.summonDrag = null;
         this.resumeAfterPortrait = false;
         if (this.session.setPaused(true)) { this.accumulator = 0; this.renderScreen(); }
@@ -106,15 +116,19 @@ export class MvpGame extends Component {
     }
     private selectPet(id: PetId): void {
         if (this.session.phase !== 'prepare' && this.session.phase !== 'battle') return;
+        this.inspectedPetId = null;
         this.selected = { kind: 'summon', species: id }; this.clearFeedback(); this.renderScreen();
     }
     private begin(): void {
+        this.inspectedPetId = null;
         if (this.session.startBattle()) { this.accumulator = 0; this.clearFeedback(); this.renderScreen(); }
     }
     private togglePause(): void {
+        this.inspectedPetId = null;
         this.session.setPaused(!this.session.paused); this.accumulator = 0; this.clearFeedback(); this.renderScreen();
     }
     private restart(): void {
+        this.inspectedPetId = null;
         this.session = new MvpSession(); this.selected = { kind: 'summon', species: 'cat' }; this.clearFeedback();
         this.accumulator = 0; this.speed = 1; this.reservesOpen = false; this.renderScreen();
     }
@@ -126,6 +140,7 @@ export class MvpGame extends Component {
         if (this.session.phase !== 'prepare' && this.session.phase !== 'battle') return;
         const occupant = this.session.pets.find(p => p.slot === slot);
         if (occupant) {
+            this.inspectedPetId = occupant.id;
             this.selected = { kind: 'pet', id: occupant.id }; this.clearFeedback(); this.renderScreen(); return;
         }
         if (this.session.paused) { this.feedback = '暂停期间不能召唤或搬迁，请先继续战斗'; return; }
@@ -133,17 +148,20 @@ export class MvpGame extends Component {
         else this.handlePetAction(this.session.summonPet(this.selected.species, slot), true);
     }
 
-    private handlePetAction(result: PetActionResult, summoned: boolean): void {
+    private handlePetAction(result: PetActionResult, summoned: boolean, alreadyWarned = false): void {
+        this.inspectedPetId = null;
         if (result.ok === false) {
             const messages: Record<ActionError, string> = {
                 WRONG_PHASE: '当前阶段不能放置宠物', PAUSED: '请先继续战斗', INVALID_SLOT: '请选择有效树桩',
                 INVALID_SPECIES: '未知宠物种类', SLOT_OCCUPIED: '树桩已被占用，请选择空位',
-                INSUFFICIENT_DEW: '灵露不足，战斗中会持续产出，也可通过击杀获得',
+                INSUFFICIENT_DEW: this.insufficientDewMessage(),
                 DEPLOYMENT_FULL: '场上最多 6 只，可先撤下一只宠物', ROSTER_FULL: '本局最多持有 12 只宠物',
                 PET_NOT_FOUND: '宠物不存在，请重新选择',
             };
             this.feedback = messages[result.reason];
             this.feedbackError = result.reason;
+            if (result.reason !== 'INSUFFICIENT_DEW' || !alreadyWarned)
+                this.toast?.show(this.feedback, { tone: 'warning' });
             this.renderScreen();
         } else {
             this.feedbackError = null;
@@ -170,15 +188,17 @@ export class MvpGame extends Component {
         const pet = selection?.kind === 'pet' ? this.session.pets.find(p => p.id === selection.id) : undefined;
         const species = selection?.kind === 'summon' ? selection.species : pet?.species ?? 'cat';
         if (selection) this.selected = selection;
+        this.inspectedPetId = selection?.kind === 'pet' ? selection.id : null;
         // Keep the source alive: range and data labels update without rebuilding its touch node.
         this.summonDrag = { touchId, species, selection, originSlot: slot,
-            start: point, point, moved: false, elapsed: 0, active: false, startedAt: this.gestureTime() };
+            start: point, point, moved: false, elapsed: 0, active: false, startedAt: this.gestureTime(), warnedInsufficientDew: false };
         this.clearFeedback();
     }
 
     private startBoardGesture(event: EventTouch): void {
         const point = this.touchPoint(event); if (!point) return;
-        const slot = portraitSlotAt(point, this.layout); if (slot === null) return;
+        const slot = portraitSlotAt(point, this.layout);
+        if (slot === null) { this.inspectedPetId = null; return; }
         const pet = this.session.pets.find(p => p.slot === slot);
         this.startGesture(pet ? { kind: 'pet', id: pet.id } : null, slot, event);
     }
@@ -196,6 +216,7 @@ export class MvpGame extends Component {
         if (Math.hypot(point.x - drag.start.x, point.y - drag.start.y) >= 12) drag.moved = true;
         // Summon avatars retain immediate dragging. Deployed pets require a 0.3-second hold.
         if (drag.selection?.kind === 'summon' && drag.moved && !this.session.paused) drag.active = true;
+        this.warnIfSummonUnaffordable();
     }
 
     private finishSummonDrag(event: EventTouch): void {
@@ -203,9 +224,10 @@ export class MvpGame extends Component {
         if (!drag || event.getID() !== drag.touchId) return;
         // 3.8.8 changes an outside release into node CANCEL; retain the original event code.
         if (event.getEventCode() !== Input.EventType.TOUCH_END) {
-            this.summonDrag = null; this.clearFeedback(); return;
+            this.summonDrag = null; this.inspectedPetId = null; this.clearFeedback(); return;
         }
         this.moveSummonDrag(event); this.summonDrag = null;
+        if (drag.moved) this.inspectedPetId = null;
         if (this.orientationBlocked || this.reservesOpen) return;
         if (!drag.selection) {
             if (!drag.moved && drag.originSlot !== null) this.handleSlot(drag.originSlot);
@@ -221,7 +243,21 @@ export class MvpGame extends Component {
         // Preview changes neither roster nor balance. Commit exactly once on a valid release.
         this.handlePetAction(drag.selection.kind === 'summon'
             ? this.session.summonPet(drag.species, slot) : this.session.movePet(drag.selection.id, slot),
-        drag.selection.kind === 'summon');
+        drag.selection.kind === 'summon', drag.warnedInsufficientDew);
+    }
+
+    private insufficientDewMessage(): string {
+        return `灵露不足，还差 ${Math.max(0, ECONOMY.summonCost - this.session.dew)} 灵露`;
+    }
+
+    private warnIfSummonUnaffordable(): void {
+        const drag = this.summonDrag;
+        if (!drag?.active || !drag.moved || drag.selection?.kind !== 'summon' || drag.warnedInsufficientDew
+            || this.session.paused || this.orientationBlocked || this.session.dew >= ECONOMY.summonCost) return;
+        if (Math.abs(drag.point.x) > 328 || drag.point.y < this.layout.arenaBottom
+            || drag.point.y > this.layout.arenaTop) return;
+        drag.warnedInsufficientDew = true;
+        this.toast?.show(this.insufficientDewMessage(), { tone: 'warning' });
     }
 
     private bindGesture(node: Node): void {
@@ -266,7 +302,9 @@ export class MvpGame extends Component {
         const g = node.addComponent(Graphics); this.rect(g, 0, 0, w, h, active ? fill : C.pale);
         this.text(node, title, 0, 0, 26, w - 20, active ? textTint : C.muted, false, true, h);
         if (active) {
-            node.on(Node.EventType.TOUCH_END, () => { if (!this.summonDrag) action(); }, this);
+            node.on(Node.EventType.TOUCH_END, () => {
+                if (!this.summonDrag) { this.inspectedPetId = null; action(); }
+            }, this);
             node.on(Node.EventType.MOUSE_ENTER, () => { node.setScale(1.025, 1.025, 1); }, this);
             node.on(Node.EventType.MOUSE_LEAVE, () => { node.setScale(1, 1, 1); }, this);
         }
@@ -274,6 +312,8 @@ export class MvpGame extends Component {
     }
 
     private onViewportResize(): void {
+        this.toast?.dismiss();
+        this.inspectedPetId = null;
         this.summonDrag = null;
         const size = typeof window !== 'undefined'
             ? { width: window.innerWidth, height: window.innerHeight } : screen.windowSize;
@@ -291,6 +331,8 @@ export class MvpGame extends Component {
         view.setDesignResolutionSize(PORTRAIT_WIDTH, PORTRAIT_MIN_HEIGHT,
             tall ? ResolutionPolicy.FIXED_WIDTH : ResolutionPolicy.SHOW_ALL);
         this.layout = portraitLayout(view.getVisibleSize().height);
+        if (!this.toast) this.toast = this.uiNode('ToastLayer', this.node, 0, 0, 616, 88).addComponent(GameToast);
+        this.toast.layout(616, this.layout.arenaTop - 48);
         this.updateOrientationGate();
         this.renderScreen();
     }
@@ -318,12 +360,16 @@ export class MvpGame extends Component {
     }
 
     private renderScreen(): void {
+        this.summonMasks.clear();
+        if (this.reservesOpen || this.orientationBlocked
+            || (this.session.phase !== 'prepare' && this.session.phase !== 'battle')) this.toast?.dismiss();
         this.summonDrag = null;
         if (this.screenRoot) { this.screenRoot.removeFromParent(); this.screenRoot.destroy(); }
         this.dynamic = null; this.dragVisual = null; this.status = null; this.counter = null; this.lastStatus = ''; this.lastCounter = '';
         this.dewLabel = null; this.deploymentLabel = null;
         this.infoTitle = null; this.infoStats = null; this.infoEffect = null; this.infoMeta = null; this.infoAction = null;
         const root = this.uiNode('PortraitMVP', this.node); this.screenRoot = root;
+        this.toast?.node.setSiblingIndex(this.node.children.length - 1);
         const g = this.graphics(root, 'Background'); this.rect(g, 0, 0, PORTRAIT_WIDTH, this.layout.height, C.bg, 0);
         if (this.orientationBlocked) {
             root.addComponent(BlockInputEvents);
@@ -375,7 +421,7 @@ export class MvpGame extends Component {
             if (open) {
                 const hit = this.uiNode(`Route-${n.id}`, root, x, y - 30, 260, 164);
                 hit.on(Node.EventType.TOUCH_END, () => {
-                    if (this.session.chooseNode(n.id)) { this.reservesOpen = false; this.clearFeedback(); this.renderScreen(); }
+                    if (this.session.chooseNode(n.id)) { this.inspectedPetId = null; this.reservesOpen = false; this.clearFeedback(); this.renderScreen(); }
                 }, this);
             }
         }
@@ -452,6 +498,11 @@ export class MvpGame extends Component {
         const g = node.addComponent(Graphics);
         this.rect(g, 0, 0, 120, 106, C.white, 22);
         this.petIcon(g, 0, -3, id, 1.25);
+        const mask = this.uiNode(`Unaffordable-${id}`, node, 0, 0, 120, 106);
+        const shade = mask.addComponent(Graphics); shade.fillColor = color(C.ink, 150);
+        shade.roundRect(-60, -53, 120, 106, 22); shade.fill();
+        mask.active = this.session.dew < ECONOMY.summonCost;
+        this.summonMasks.set(id, mask);
         node.on(Node.EventType.TOUCH_START,
             (event: EventTouch) => this.startGesture({ kind: 'summon', species: id }, null, event), this);
         this.bindGesture(node);
@@ -496,6 +547,8 @@ export class MvpGame extends Component {
     private updateHud(): void {
         if (!this.status || !this.counter || !this.session.current) return;
         const phase = this.session.phase;
+        const unaffordable = this.session.dew < ECONOMY.summonCost;
+        for (const mask of this.summonMasks.values()) if (mask.active !== unaffordable) mask.active = unaffordable;
         if (this.feedbackError === 'INSUFFICIENT_DEW' && this.session.dew >= ECONOMY.summonCost) this.clearFeedback();
         const selected = this.selected;
         const pet = selected.kind === 'pet' ? this.session.pets.find(p => p.id === selected.id) : undefined;
@@ -526,7 +579,7 @@ export class MvpGame extends Component {
             : species === 'mushroom' ? '孢子只伤害范围内敌人，离开范围即停止'
                 : species === 'cat' ? '挥爪攻击最接近摇篮树的单个敌人' : '发射星弹，追踪范围内最靠前的敌人';
         const meta = pet ? `${pet.slot === null ? '后备' : '已部署'} #${pet.id} · 长按拖动，或点击空位调整`
-            : `未部署 · 中央为范围预览 · ${this.session.dew < ECONOMY.summonCost ? '灵露不足' : '拖动头像召唤'}`;
+            : `未部署 · ${ECONOMY.summonCost} 灵露 · ${this.session.dew < ECONOMY.summonCost ? '灵露不足' : '点击空位或拖动头像'}`;
         if (this.infoTitle) this.infoTitle.color = color(this.petTint(species));
         if (this.infoStats) this.infoStats.color = color(boosted ? C.leaf : C.ink);
         const labels: [Label | null, string][] = [
@@ -543,15 +596,18 @@ export class MvpGame extends Component {
             const pet = selected.kind === 'pet' ? s.pets.find(p => p.id === selected.id) : undefined;
             const species = pet?.species ?? (selected.kind === 'summon' ? selected.species : 'cat');
             const drag = this.summonDrag;
-            let p = pet?.slot !== null && pet?.slot !== undefined ? this.boardPoint(SLOTS[pet.slot])
-                : { x: 0, y: this.layout.arenaCenter };
+            // A summon selection has no world position: never invent a center-screen range.
+            let p = pet && pet.id === this.inspectedPetId && pet.slot !== null
+                ? this.boardPoint(SLOTS[pet.slot]) : null;
             if (drag?.active && drag.selection) {
                 const slot = portraitSlotAt(drag.point, this.layout);
                 p = slot === null ? drag.point : this.boardPoint(SLOTS[slot]);
             }
             const tint = this.petTint(species); const range = PETS[species].range * this.layout.scale;
-            this.circle(g, p.x, p.y, range, tint, 24);
-            g.strokeColor = color(tint, 150); g.lineWidth = 2; g.circle(p.x, p.y, range); g.stroke();
+            if (p) {
+                this.circle(g, p.x, p.y, range, tint, 24);
+                g.strokeColor = color(tint, 150); g.lineWidth = 2; g.circle(p.x, p.y, range); g.stroke();
+            }
             if (selected.kind === 'summon' && this.dragVisual) {
                 const x = -240 + PET_ORDER.indexOf(selected.species) * 160;
                 const outline = this.dragVisual; outline.strokeColor = color(tint); outline.lineWidth = 4;

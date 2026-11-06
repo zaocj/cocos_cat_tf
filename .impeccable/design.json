@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-05T16:14:29.774218+00:00",
+  "generatedAt": "2026-11-06T02:22:41.944013+00:00",
   "title": "Design System: 萌宠变异录 · 无素材 MVP",
   "extensions": {
     "colorMeta": {
@@ -399,7 +399,7 @@
     {
       "name": "四宠头像栏",
       "kind": "card",
-      "description": "底部四个 120 × 106 纯头像，选中描边；名称、价格、数据在顶部卡片。",
+      "description": "四个 120×106 纯头像；灵露不足时增加 #234235、alpha 150/255 的半透明蒙层，恢复可支付时移除；保持可查看与拖动。",
       "html": "<div class=\"avatars\"><i title=\"爪爪猫\"></i><i title=\"星弹兔\"></i><i title=\"铃芽鹿\"></i><i title=\"茸茸菇\"></i></div>",
       "css": ".avatars{display:flex;gap:40px;padding:12px;background:#EDF3E7}.avatars i{box-sizing:border-box;width:120px;height:106px;border-radius:22px;background:radial-gradient(circle,#F1AF64 34%,#FCFDF7 35%);border:3px solid #B85C20}.avatars i:nth-child(2){background:radial-gradient(circle,#96CBE3 34%,#FCFDF7 35%);border-color:transparent}.avatars i:nth-child(3){background:radial-gradient(circle,#C9AD77 34%,#FCFDF7 35%);border-color:transparent}.avatars i:nth-child(4){background:radial-gradient(circle,#CE9DD1 34%,#FCFDF7 35%);border-color:transparent}",
       "refersTo": "pet-card"
@@ -431,6 +431,13 @@
       "description": "656 × 152，名称、攻击/施法数据、效果、部署信息；选中实例支持收回。",
       "html": "<div class=\"info\"><strong>铃芽鹿 · 增益</strong><span>施法范围 185 · 友军攻击力 +40% · 不攻击</span><span>范围内友军获得增益，同类光环不叠加</span></div>",
       "css": ".info{width:656px;height:152px;box-sizing:border-box;padding:16px 20px;display:flex;flex-direction:column;justify-content:space-around;border-radius:16px;background:#FCFDF7;color:#234235;font:23px sans-serif}.info strong{font-size:28px;color:#4D8251}"
+    },
+    {
+      "name": "通用 Toast",
+      "kind": "card",
+      "description": "616×88，warning/info/success；2.4 秒自动消失，不阻挡手势，不因相同消息反复续时。",
+      "html": "<div class=\"toast\"><b>!</b><span>灵露不足，还差 30 灵露</span></div>",
+      "css": ".toast{box-sizing:border-box;width:616px;min-height:88px;padding:16px 24px;border:2px solid #F1AF64;border-radius:18px;background:rgba(35,66,53,.96);color:#FCFDF7;display:flex;gap:24px;align-items:center;font:700 26px/1.3 sans-serif}.toast b{color:#F1AF64;font-size:30px}.toast span{flex:1;text-align:center}"
     }
   ],
   "narrative": {

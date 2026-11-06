@@ -17,3 +17,7 @@ FIRST VIEWPORT：仅竖屏，720×1280 基准。顶部标题和树心；路线�
 FORM：用户指定的森林棋盘与路线结构，不进行随机方向选择；seed: none (user-pinned)。签名交互是放置时展示橙/蓝攻击范围与绿/紫施法范围，战斗中对应挥击/弹道。
 
 FINISH：unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+
+范围指示器只在主动拖动或点击场上宠物时显示；没有目标时不绘制，禁止回退到战场中心。拖放结束、取消、点击道路空白、操作按钮或转屏/后台时收起。底部头像点击仅切换召唤数据，拖入战场后预览范围。
+
+召唤可用性与 Toast：灵露低于 30 时，四个头像增加 #234235、alpha 150/255 的圆角蒙层，保持可查看/尝试，回到 30 即恢复。通用 Toast 位于战场顶部内侧（arenaTop−48），最大 616×88，深林底/暖白字，warning 橙色描边与 !；0.12 秒淡入、2.4 秒总时长、末 0.22 秒淡出。无全屏遮罩、不拦截触摸。拖动召唤头像进入战场时提示“灵露不足，还差 N 灵露”，同一次拖动只提示一次，点击不足也复用；可配置 info / warning / success，重复文案不续时。
