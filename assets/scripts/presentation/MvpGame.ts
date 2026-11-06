@@ -2,10 +2,11 @@ import {
     _decorator, BlockInputEvents, Color, Component, EventKeyboard, EventTouch, game, Game, Graphics, input, Input,
     KeyCode, Label, Layers, Mask, Node, profiler, ResolutionPolicy, screen, UITransform, Vec3, view,
 } from 'cc';
-import { ActionError, ECONOMY, MvpSession, PATH, PETS, PET_ORDER, PetActionResult, PetId, SLOTS, STEP } from '../domain/MvpSession';
+import { ActionError, ECONOMY, MvpSession, PATH, PETS, PET_ORDER, PetActionResult, PetId, SLOTS, STEP, EnemyState } from '../domain/MvpSession';
 import { isPortrait, PortraitLayout, portraitLayout, portraitSlotAt, PORTRAIT_MIN_HEIGHT, PORTRAIT_WIDTH, toPortraitBoard } from './PortraitLayout';
 
 import { GameToast } from './GameToast';
+import { ENEMIES, ENEMY_BALANCE } from '../domain/EnemyConfig';
 import { ROUTE_BOUNDS } from '../domain/ExpeditionRoute';
 import { RouteMapViewport } from './RouteMapViewport';
 import { RouteMapView } from './RouteMapView';
@@ -53,6 +54,10 @@ export class MvpGame extends Component {
     private counter: Label | null = null;
     private selected: Selection = { kind: 'summon', species: 'cat' };
     private inspectedPetId: number | null = null;
+    private inspectedEnemyId: number | null = null;
+    private enemyLabels = new Map<number, Label>();
+    private announcedEnemies = new Set<number>();
+    private bossStatus: Label | null = null;
     private dewLabel: Label | null = null;
     private deploymentLabel: Label | null = null;
     private infoTitle: Label | null = null;
@@ -108,6 +113,12 @@ export class MvpGame extends Component {
                 if (this.session.phase !== 'battle') { this.accumulator = 0; this.renderScreen(); break; }
             }
         }
+        for (const enemy of this.session.enemies) {
+            if ((enemy.kind === 'elite' || enemy.kind === 'boss') && !this.announcedEnemies.has(enemy.id)) {
+                this.announcedEnemies.add(enemy.id);
+                this.toast?.show(`${enemy.kind === 'boss' ? 'BOSS' : '精英'} ${ENEMIES[enemy.kind].name}来袭`, { tone: 'warning', duration: 3 });
+            }
+        }
         if (this.dynamic) this.drawDynamic(this.dynamic);
         this.updateHud();
     }
@@ -130,6 +141,7 @@ export class MvpGame extends Component {
         }
     }
     private selectPet(id: PetId): void {
+        this.inspectedEnemyId = null;
         if (this.session.phase !== 'prepare' && this.session.phase !== 'battle') return;
         this.inspectedPetId = null;
         this.selected = { kind: 'summon', species: id }; this.clearFeedback(); this.renderScreen();
@@ -143,6 +155,7 @@ export class MvpGame extends Component {
         this.session.setPaused(!this.session.paused); this.accumulator = 0; this.clearFeedback(); this.renderScreen();
     }
     private restart(): void {
+        this.inspectedEnemyId = null; this.announcedEnemies.clear();
         this.inspectedPetId = null;
         this.session = freshSession(); this.mapCamera = null; this.selected = { kind: 'summon', species: 'cat' }; this.clearFeedback();
         this.accumulator = 0; this.speed = 1; this.reservesOpen = false; this.renderScreen();
@@ -202,6 +215,7 @@ export class MvpGame extends Component {
         const pet = selection?.kind === 'pet' ? this.session.pets.find(p => p.id === selection.id) : undefined;
         const species = selection?.kind === 'summon' ? selection.species : pet?.species ?? 'cat';
         if (selection) this.selected = selection;
+        this.inspectedEnemyId = null;
         this.inspectedPetId = selection?.kind === 'pet' ? selection.id : null;
         // Keep the source alive: range and data labels update without rebuilding its touch node.
         this.summonDrag = { touchId, species, selection, originSlot: slot,
@@ -211,6 +225,11 @@ export class MvpGame extends Component {
 
     private startBoardGesture(event: EventTouch): void {
         const point = this.touchPoint(event); if (!point) return;
+        const enemy = this.session.enemies.find(e => {
+            const p = this.boardPoint(e); return Math.hypot(point.x - p.x, point.y - p.y) <= ENEMIES[e.kind].radius + 8;
+        });
+        if (enemy) { this.inspectedEnemyId = enemy.id; this.inspectedPetId = null; return; }
+        this.inspectedEnemyId = null;
         const slot = portraitSlotAt(point, this.layout);
         if (slot === null) { this.inspectedPetId = null; return; }
         const pet = this.session.pets.find(p => p.slot === slot);
@@ -373,7 +392,7 @@ export class MvpGame extends Component {
     }
 
     private renderScreen(): void {
-        this.summonMasks.clear();
+        this.summonMasks.clear(); this.enemyLabels.clear(); this.bossStatus = null;
         if (this.reservesOpen || this.orientationBlocked
             || (this.session.phase !== 'prepare' && this.session.phase !== 'battle')) this.toast?.dismiss();
         this.summonDrag = null;
@@ -418,6 +437,7 @@ export class MvpGame extends Component {
         const zoomLabel = this.text(root, '', 190, top - 151, 24, 100, C.ink, false, true, 64);
         map.setup(this.mapCamera, this.session.route, this.session.visited, focusNodes.map(n => n.id), id => {
             if (!this.session.chooseNode(id)) return;
+            this.inspectedEnemyId = null; this.announcedEnemies.clear();
             this.inspectedPetId = null; this.reservesOpen = false; this.clearFeedback(); this.renderScreen();
         }, zoom => { zoomLabel.string = `${Math.round(zoom * 100)}%`; });
         this.button(root, complete ? '重新出发' : '定位当前', -214, top - 151, 200, 80,
@@ -432,10 +452,10 @@ export class MvpGame extends Component {
         const { top, bottom, arenaHeight, arenaCenter } = this.layout;
         this.counter = this.text(root, '', 0, top - 91, 24, 656, C.muted, false, false, 40);
         this.rect(g, 0, top - 152, 656, 76, C.white, 16);
-        this.text(root, '受伤即结束', -185, top - 167, 22, 250, C.red, false, false, 32);
+        this.text(root, current.encounter === 'boss' ? 'BOSS 战 · 半血狂暴' : current.encounter === 'elite' ? '精英战 · 大型雾兽' : '雾团 / 疾风 / 岩甲', -185, top - 167, 19, 260, current.encounter === 'normal' ? C.muted : C.red, false, false, 32);
         this.text(root, `${current.name} · 第 ${session.visited.length + 1} 站`, -185, top - 132, 22, 250, C.ink, false, true, 36);
         this.dewLabel = this.text(root, '', 140, top - 134, 32, 330, C.green, false, true, 48);
-        this.text(root, `战斗 +${ECONOMY.dewPerSecond}/秒 · 击杀 +${ECONOMY.dewPerKill}`, 140, top - 169, 22, 330, C.muted, false, false, 32);
+        this.text(root, `战斗 +${ECONOMY.dewPerSecond}/秒 · 击杀 +${ENEMIES.mist.reward}～${ENEMIES.boss.reward}`, 140, top - 169, 22, 330, C.muted, false, false, 32);
         this.rect(g, 0, arenaCenter, 656, arenaHeight, C.board, 22);
         for (let i = 0; i < 18; i++) {
             this.circle(g, i % 2 === 0 ? -290 : 290, this.layout.arenaBottom + 38 + (i * 97 % (arenaHeight - 76)), 4 + i % 3, '#BCCFAC');
@@ -461,6 +481,8 @@ export class MvpGame extends Component {
         PET_ORDER.forEach((id, i) => this.petCard(root, id, -240 + i * 160, bottom + 216));
         this.deploymentLabel = this.text(root, '', 0, bottom + 312, 22, 640, C.ink, false, false, 32);
         this.drawInfoCard(root, g);
+        this.bossStatus = this.text(root, '', 120, this.layout.arenaTop - 30, 22, 400, C.red, false, true, 36);
+        this.bossStatus.node.active = false;
         if (session.phase === 'prepare') {
             this.button(root, '开始防守', -110, bottom + 112, 420, 84, () => this.begin());
         } else if (session.phase === 'battle') {
@@ -505,7 +527,7 @@ export class MvpGame extends Component {
         this.infoEffect = this.text(root, '', 0, y - 30, 23, 616, C.muted, true, false, 34);
         this.infoMeta = this.text(root, '', 0, y - 61, 21, 616, C.muted, true, false, 30);
         const action = this.button(root, '30 灵露', 246, y + 43, 132, 54, () => {
-            if (this.selected.kind !== 'pet') return;
+            if (this.inspectedEnemyId !== null || this.selected.kind !== 'pet') return;
             const pet = this.session.pets.find(p => p.id === this.selectedPetId());
             if (pet?.slot !== null && pet?.slot !== undefined)
                 this.handlePetAction(this.session.movePet(pet.id, pet.slot), false);
@@ -549,7 +571,7 @@ export class MvpGame extends Component {
                     : this.session.paused ? '已暂停：灵露和战斗均冻结，请继续后再召唤或搬迁'
                         : this.summonDrag?.active ? '范围随落点预览，拖到空树桩后松手放置'
                             : this.feedback || action;
-        const count = phase === 'prepare' ? `即将来袭  ${this.session.current.count} 只雾团`
+        const count = phase === 'prepare' ? `即将来袭 ${this.session.current.count} 只 · ${this.session.current.encounter === "boss" ? "BOSS 压轴" : this.session.current.encounter === "elite" ? "精英压阵" : "混合雾兽"}`
             : `已击退 ${this.session.kills} / ${this.session.current.count} · 场上 ${this.session.enemies.length}`;
         if (text !== this.lastStatus) { this.status.string = text; this.lastStatus = text; }
         if (count !== this.lastCounter) { this.counter.string = count; this.lastCounter = count; }
@@ -557,6 +579,21 @@ export class MvpGame extends Component {
         if (this.dewLabel && this.dewLabel.string !== dewText) this.dewLabel.string = dewText;
         const deployment = `场上 ${this.session.deployedCount} / ${ECONOMY.deploymentLimit} · 后备 ${this.session.pets.length - this.session.deployedCount}`;
         if (this.deploymentLabel && this.deploymentLabel.string !== deployment) this.deploymentLabel.string = deployment;
+        const enemy = this.session.enemies.find(e => e.id === this.inspectedEnemyId);
+        if (enemy) {
+            const spec = ENEMIES[enemy.kind]; const rage = enemy.kind === 'boss' && enemy.hp <= enemy.maxHp * 0.5;
+            const values: [Label | null, string][] = [
+                [this.infoTitle, `${spec.name} · ${enemy.kind === 'boss' ? 'BOSS' : enemy.kind === 'elite' ? '精英' : '雾兽'}`],
+                [this.infoStats, `生命 ${Math.ceil(enemy.hp)} / ${enemy.maxHp} · 移速 ${Math.round(this.session.current.speed * spec.speed * (rage ? ENEMY_BALANCE.bossRageSpeed : 1))}`],
+                [this.infoEffect, rage ? '狂暴中！移速提升 25%' : spec.trait],
+                [this.infoMeta, `击败 +${spec.reward} 灵露 · 点击头像切回伙伴资料`], [this.infoAction, '敌人'],
+            ];
+            for (const [label, value] of values) if (label && label.string !== value) label.string = value;
+            if (this.infoTitle) this.infoTitle.color = color(spec.tint);
+            if (this.infoStats) this.infoStats.color = color(C.ink);
+            return;
+        }
+        this.inspectedEnemyId = null;
         const species = pet?.species ?? (selected.kind === 'summon' ? selected.species : 'cat');
         const spec = PETS[species]; const damage = pet ? this.session.effectiveDamage(pet) : spec.damage;
         const fmt = (n: number): string => Number(n.toFixed(1)).toString();
@@ -603,17 +640,21 @@ export class MvpGame extends Component {
                 outline.roundRect(x - 60, this.layout.bottom + 163, 120, 106, 22); outline.stroke();
             }
         }
-        for (const enemy of s.enemies) {
-            const p = this.boardPoint(enemy); const pulse = Math.sin(s.tick * 0.22 + enemy.id) * 2;
-            this.circle(g, p.x, p.y - 10, 16, C.roadEdge, 100);
-            this.circle(g, p.x, p.y + pulse, 17, C.enemy);
-            this.circle(g, p.x - 9, p.y + 8 + pulse, 9, C.enemy);
-            this.circle(g, p.x + 8, p.y + 8 + pulse, 10, C.enemy);
-            this.circle(g, p.x - 5, p.y + 3 + pulse, 2.3, C.enemyDark);
-            this.circle(g, p.x + 5, p.y + 3 + pulse, 2.3, C.enemyDark);
-            this.rect(g, p.x, p.y + 30, 34, 5, '#A7B59B', 2);
-            const width = 34 * Math.max(0, enemy.hp / enemy.maxHp);
-            if (width > 0) this.rect(g, p.x - 17 + width / 2, p.y + 30, width, 5, C.green, 2);
+        const liveIds = new Set(s.enemies.map(e => e.id));
+        for (const [id, label] of this.enemyLabels) if (!liveIds.has(id)) {
+            label.node.destroy(); this.enemyLabels.delete(id);
+        }
+        for (const enemy of s.enemies) this.drawEnemy(g, enemy);
+        const boss = s.enemies.find(e => e.kind === 'boss');
+        if (this.bossStatus) {
+            this.bossStatus.node.active = !!boss;
+            if (boss) {
+                const title = `BOSS ${ENEMIES.boss.name}  ${Math.ceil(boss.hp)} / ${boss.maxHp}${boss.hp <= boss.maxHp * 0.5 ? ' · 狂暴' : ''}`;
+                if (this.bossStatus.string !== title) this.bossStatus.string = title;
+                const y = this.layout.arenaTop - 57; const width = 400 * Math.max(0, boss.hp / boss.maxHp);
+                this.rect(g, 120, y, 400, 10, '#B9C8A8', 4);
+                if (width > 0) this.rect(g, -80 + width / 2, y, width, 10, C.red, 4);
+            }
         }
         for (const pet of s.pets) {
             if (pet.slot === null) continue;
@@ -656,6 +697,64 @@ export class MvpGame extends Component {
             this.circle(avatar, x, y, 35, C.white, 230);
             this.petIcon(avatar, x, y, drag.species, 1);
         }
+    }
+
+    private drawEnemy(g: Graphics, enemy: EnemyState): void {
+        const p = this.boardPoint(enemy); const spec = ENEMIES[enemy.kind]; const r = spec.radius;
+        const y = p.y + Math.sin(this.session.tick * 0.18 + enemy.id) * 2;
+        const rage = enemy.kind === 'boss' && enemy.hp <= enemy.maxHp * 0.5;
+        this.circle(g, p.x, y - r * 0.6, r * 0.9, C.roadEdge, 120);
+        if (rage) this.circle(g, p.x, y, r + 9, C.red, 55);
+        this.circle(g, p.x, y, r, spec.tint);
+        if (enemy.kind === 'mist' || enemy.kind === 'mender') {
+            this.circle(g, p.x - r * 0.6, y + r * 0.5, r * 0.55, spec.tint);
+            this.circle(g, p.x + r * 0.5, y + r * 0.5, r * 0.6, spec.tint);
+        }
+        if (enemy.kind === 'runner' || enemy.kind === 'elite') {
+            g.fillColor = color(enemy.kind === 'elite' ? '#F5EED9' : spec.tint);
+            for (const sign of [-1, 1]) {
+                g.moveTo(p.x + sign * r * 0.25, y + r * 0.6);
+                g.lineTo(p.x + sign * r * 0.9, y + r * 1.5);
+                g.lineTo(p.x + sign * r * 0.85, y + r * 0.3); g.close(); g.fill();
+            }
+        }
+        if (enemy.kind === 'armored') {
+            g.strokeColor = color('#D9E6D0'); g.lineWidth = 3;
+            for (let i = 0; i <= 6; i++) {
+                const angle = i * Math.PI / 3; const x = p.x + Math.cos(angle) * r * 0.75;
+                const sy = y + Math.sin(angle) * r * 0.75;
+                if (i === 0) g.moveTo(x, sy); else g.lineTo(x, sy);
+            }
+            g.stroke(); this.line(g, p.x - r * 0.7, y, p.x + r * 0.7, y, '#D9E6D0', 2);
+        }
+        if (enemy.kind === 'mender') {
+            this.line(g, p.x - 6, y + r + 8, p.x + 6, y + r + 8, '#FCFDF7', 3);
+            this.line(g, p.x, y + r + 2, p.x, y + r + 14, '#FCFDF7', 3);
+        }
+        if (enemy.kind === 'boss') {
+            g.fillColor = color('#EDC365');
+            g.moveTo(p.x - r * 0.8, y + r * 0.6); g.lineTo(p.x - r, y + r * 1.4);
+            g.lineTo(p.x - r * 0.35, y + r); g.lineTo(p.x, y + r * 1.6);
+            g.lineTo(p.x + r * 0.35, y + r); g.lineTo(p.x + r, y + r * 1.4);
+            g.lineTo(p.x + r * 0.8, y + r * 0.6); g.close(); g.fill();
+        }
+        this.circle(g, p.x - r * 0.3, y + r * 0.1, Math.max(2.2, r * 0.11), rage ? '#EDC365' : '#234235');
+        this.circle(g, p.x + r * 0.3, y + r * 0.1, Math.max(2.2, r * 0.11), rage ? '#EDC365' : '#234235');
+        const large = enemy.kind === 'elite' || enemy.kind === 'boss';
+        const bar = large ? 72 : 40; const hpY = p.y + r + (large ? 27 : 21);
+        this.rect(g, p.x, hpY, bar, 6, '#A7B59B', 2);
+        const remaining = bar * Math.max(0, enemy.hp / enemy.maxHp);
+        if (remaining > 0) this.rect(g, p.x - bar / 2 + remaining / 2, hpY, remaining, 6, large ? C.red : C.green, 2);
+        let label = this.enemyLabels.get(enemy.id);
+        if (!label) {
+            label = this.text(g.node, '', 0, 0, large ? 20 : 16, large ? 180 : 120, large ? C.red : C.ink, false, large, 28);
+            this.enemyLabels.set(enemy.id, label);
+        }
+        const halfWidth = large ? 90 : 60;
+        label.node.setPosition(Math.max(-324 + halfWidth, Math.min(324 - halfWidth, p.x)), hpY + 19);
+        const tag = enemy.kind === 'boss' ? 'BOSS' : enemy.kind === 'elite' ? '精英' : enemy.kind === 'mist' ? '' : spec.name.slice(0, 2);
+        const title = `${tag}${tag ? ' ' : ''}${Math.ceil(enemy.hp)}`;
+        if (label.string !== title) label.string = title;
     }
 
     private petIcon(g: Graphics, x: number, y: number, id: PetId, scale: number): void {
@@ -701,7 +800,7 @@ export class MvpGame extends Component {
         shade.rect(-360, -this.layout.top, 720, this.layout.height); shade.fill();
         this.rect(shade, 0, 0, 640, 440, C.white, 20);
         this.text(modal, won ? '这一站，守住了。' : '树心受伤了。', 0, 128, 36, 590, won ? C.green : C.red, false, true, 84);
-        this.text(modal, won ? `击退 ${this.session.kills} 只雾团\n带着萌宠小队，继续出发。`
+        this.text(modal, won ? `击退 ${this.session.kills} 只雾兽\n带着萌宠小队，继续出发。`
             : '敌人突破防线，树心 1 → 0。\n换个位置，再试一次。', 0, 20, 26, 580, C.muted, false, false, 110);
         this.button(modal, won ? (this.session.current?.children.length ? '继续选择路线' : '抵达净土') : '重新选择路线',
             0, -134, 560, 84, () => {

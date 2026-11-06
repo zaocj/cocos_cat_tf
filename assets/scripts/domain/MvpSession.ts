@@ -1,3 +1,4 @@
+import { ENEMIES, ENEMY_BALANCE, EnemyKind } from './EnemyConfig';
 import { generateRoute, RouteNode, ROUTE_DEPTHS } from './ExpeditionRoute';
 export type { RouteNode } from './ExpeditionRoute';
 
@@ -7,7 +8,7 @@ export type PetId = 'cat' | 'rabbit' | 'deer' | 'mushroom';
 export interface Point { x: number; y: number }
 export const STEP = 1 / 30;
 export const ECONOMY = {
-    startingDew: 60, summonCost: 30, dewPerSecond: 2, dewPerKill: 2,
+    startingDew: 60, summonCost: 30, dewPerSecond: 2,
     deploymentLimit: 6, rosterLimit: 12, relocationTicks: 30,
 } as const;
 export const PET_ORDER: readonly PetId[] = ['cat', 'rabbit', 'deer', 'mushroom'];
@@ -36,7 +37,7 @@ export interface PetState {
 export type ActionError = 'WRONG_PHASE' | 'PAUSED' | 'INVALID_SLOT' | 'INVALID_SPECIES'
     | 'SLOT_OCCUPIED' | 'INSUFFICIENT_DEW' | 'DEPLOYMENT_FULL' | 'ROSTER_FULL' | 'PET_NOT_FOUND';
 export type PetActionResult = { ok: true; pet: PetState } | { ok: false; reason: ActionError };
-export interface EnemyState extends Point { id: number; distance: number; hp: number; maxHp: number }
+export interface EnemyState extends Point { id: number; kind: EnemyKind; distance: number; hp: number; maxHp: number; lastDamageTick: number }
 export interface ProjectileState extends Point { id: number; targetId: number; damage: number }
 export interface AttackMark { from: Point; to: Point; expires: number; kind: PetId }
 
@@ -174,22 +175,38 @@ export class MvpSession {
 
     effectiveDamage(pet: PetState): number { return PETS[pet.species].damage * this.attackMultiplier(pet); }
 
+    private damageEnemy(enemy: EnemyState, amount: number, source: 'direct' | 'spore'): void {
+        if (enemy.hp <= 0) return;
+        enemy.hp -= amount * (source === 'spore' ? 1 : 1 - ENEMIES[enemy.kind].armor);
+        enemy.lastDamageTick = this.tick;
+    }
+
     step(): void {
         const encounter = this.current;
         if (this.phase !== 'battle' || this.paused || !encounter) return;
         this.tick++;
         const time = this.tick * STEP;
         if (this.spawned < encounter.count && time >= this.nextSpawn) {
-            this.enemies.push({ id: this.nextId++, distance: 0, ...PATH[0], hp: encounter.hp, maxHp: encounter.hp });
-            this.spawned++; this.nextSpawn += 2;
+            const kind = encounter.wave[this.spawned];
+            const hp = Math.round(encounter.hp * ENEMIES[kind].hp);
+            this.enemies.push({ id: this.nextId++, kind, distance: 0, ...PATH[0], hp, maxHp: hp, lastDamageTick: this.tick });
+            this.spawned++;
+            this.nextSpawn += encounter.wave[this.spawned] === 'boss' ? ENEMY_BALANCE.bossGap : ENEMY_BALANCE.spawnGap;
         }
         for (const enemy of this.enemies) {
-            enemy.distance += encounter.speed * STEP;
+            const spec = ENEMIES[enemy.kind];
+            const rage = enemy.kind === 'boss' && enemy.hp <= enemy.maxHp * 0.5 ? ENEMY_BALANCE.bossRageSpeed : 1;
+            enemy.distance += encounter.speed * spec.speed * rage * STEP;
             const p = pointOnPath(enemy.distance); enemy.x = p.x; enemy.y = p.y;
             // MVP contract: reaching the base ends the run before any same-tick hit.
             if (enemy.distance >= PATH_LENGTH) {
                 this.heart = 0; this.phase = 'lost'; return;
             }
+        }
+        for (const enemy of this.enemies) {
+            const regen = ENEMIES[enemy.kind].regeneration;
+            if (enemy.hp > 0 && regen && this.tick - enemy.lastDamageTick >= ENEMY_BALANCE.regenDelayTicks)
+                enemy.hp = Math.min(enemy.maxHp, enemy.hp + enemy.maxHp * regen * STEP);
         }
         // Integer tick boundaries avoid floating-point drift and grant no income while paused/preparing.
         if (this.tick % 30 === 0) this.dew += ECONOMY.dewPerSecond;
@@ -203,7 +220,7 @@ export class MvpSession {
                 let hit = false;
                 for (const enemy of this.enemies) {
                     if (enemy.hp <= 0 || distance(origin, enemy) > spec.range) continue;
-                    enemy.hp -= damage; hit = true;
+                    this.damageEnemy(enemy, damage, 'spore'); hit = true;
                     this.marks.push({ from: { ...origin }, to: { x: enemy.x, y: enemy.y },
                         expires: time + 0.22, kind: 'mushroom' });
                 }
@@ -219,7 +236,7 @@ export class MvpSession {
             if (!target) continue;
             pet.cooldown = spec.interval; pet.lastAttack = time;
             if (pet.species === 'cat') {
-                target.hp -= damage;
+                this.damageEnemy(target, damage, 'direct');
                 this.marks.push({ from: { ...origin }, to: { x: target.x, y: target.y }, expires: time + 0.18, kind: 'cat' });
             } else {
                 this.projectiles.push({ id: this.nextId++, targetId: target.id, ...origin, damage });
@@ -230,7 +247,7 @@ export class MvpSession {
             if (!target) { projectile.targetId = -1; continue; }
             const length = distance(projectile, target); const travel = 510 * STEP;
             if (length <= travel) {
-                target.hp -= projectile.damage; projectile.targetId = -1;
+                this.damageEnemy(target, projectile.damage, 'direct'); projectile.targetId = -1;
                 this.marks.push({ from: { ...target }, to: { ...target }, expires: time + 0.12, kind: 'rabbit' });
             } else {
                 projectile.x += (target.x - projectile.x) / length * travel;
@@ -238,7 +255,7 @@ export class MvpSession {
             }
         }
         for (const enemy of this.enemies) {
-            if (enemy.hp <= 0) { this.kills++; this.dew += ECONOMY.dewPerKill; }
+            if (enemy.hp <= 0) { this.kills++; this.dew += ENEMIES[enemy.kind].reward; }
         }
         this.enemies = this.enemies.filter(e => e.hp > 0);
         this.projectiles = this.projectiles.filter(p => p.targetId !== -1);

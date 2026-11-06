@@ -1,6 +1,9 @@
+import { ENEMY_BALANCE, EncounterKind, encounterAt, waveFor, EnemyKind } from './EnemyConfig';
+
 export interface RouteNode {
     id: string; name: string; detail: string; depth: number; x: number; y: number;
     count: number; hp: number; speed: number; children: string[];
+    encounter: EncounterKind; wave: EnemyKind[];
 }
 
 export const ROUTE_NODE_COUNT = 30;
@@ -26,13 +29,15 @@ export function generateRoute(seed: number): RouteNode[] {
         const spread = width === 2 ? 140 + random() * 40 : 210;
         return Array.from({ length: width }, (_, lane): RouteNode => {
             const final = depth === ROUTE_DEPTHS - 1;
-            const count = depth === 0 ? 6 + lane : Math.min(15, 6 + Math.floor(depth * 0.6) + Math.floor(random() * 3));
+            const encounter = encounterAt(depth, lane);
+            const count = depth === 0 ? 6 + lane : Math.min(15, 6 + Math.floor(depth * 0.6) + Math.floor(random() * 3)) - (encounter === 'boss' ? 2 : 0);
             return {
-                id: `route-${depth}-${lane}`, name: final ? '树心守卫' : names[Math.floor(random() * names.length)],
+                id: `route-${depth}-${lane}`, name: final ? '噬雾王座' : encounter === 'boss' ? '雾冠之巢' : names[Math.floor(random() * names.length)],
                 depth, x: Math.round((width === 1 ? 0 : -spread + lane * spread * 2 / (width - 1)) + (random() - 0.5) * 32),
-                y: 140 + depth * 240, count, hp: depth === 0 ? 30 : 30 + depth * 4 + Math.floor(random() * 7),
+                y: 140 + depth * 240, count, encounter, wave: waveFor(depth, count, encounter),
+                hp: ENEMY_BALANCE.startHp + depth * ENEMY_BALANCE.hpPerDepth + (depth === 0 ? 0 : Math.floor(random() * 9)),
                 speed: depth === 0 ? 65 : 65 + Math.min(20, depth + Math.floor(random() * 7)),
-                detail: `${count} 只雾兽`, children: [],
+                detail: `${encounter === 'boss' ? 'BOSS' : encounter === 'elite' ? '精英' : '混合'} · ${count} 只雾兽`, children: [],
             };
         });
     });

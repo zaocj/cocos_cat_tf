@@ -50,7 +50,7 @@ test('passive income grants 2 dew per simulation second, never during preparatio
 
 test('a kill awards exactly 2 dew and cannot be collected again', () => {
     const game = new MvpSession(); game.chooseNode(game.available[0].id); summon(game, 'cat', 0); game.startBattle();
-    game.enemies = [{ id: 100, distance: 210, ...pointOnPath(210), hp: 24, maxHp: 24 }];
+    game.enemies = [{ id: 100, kind: 'mist', lastDamageTick: 0, distance: 210, ...pointOnPath(210), hp: 24, maxHp: 24 }];
     game.step(); expect(game.kills).toBe(1); expect(game.dew).toBe(32);
     game.step(); expect(game.kills).toBe(1); expect(game.dew).toBe(32);
 });
@@ -71,7 +71,7 @@ test('moving and swapping cost nothing; combat relocation pauses attacks for one
     expect(cat.slot).toBe(1); expect(rabbit.slot).toBe(0); expect(game.dew).toBe(0);
     game.startBattle(); expect(game.movePet(cat.id, 0).ok).toBe(true);
     expect(cat.readyTick).toBe(30); expect(rabbit.readyTick).toBe(30);
-    game.enemies = [{ id: 100, distance: 100, ...pointOnPath(100), hp: 1000, maxHp: 1000 }];
+    game.enemies = [{ id: 100, kind: 'mist', lastDamageTick: 0, distance: 100, ...pointOnPath(100), hp: 1000, maxHp: 1000 }];
     advance(game, 29 * STEP); expect(game.enemies[0].hp).toBe(1000);
     game.step(); expect(game.enemies[0].hp < 1000 || game.projectiles.length > 0).toBeTruthy();
     game.setPaused(true); const slot = cat.slot;
@@ -128,7 +128,7 @@ test('ranged pet fires tracking projectiles; melee deals damage without a projec
 test('arriving at the base takes priority over a lethal projectile in the same tick', () => {
     const game = new MvpSession(); game.chooseNode(game.available[0].id); game.startBattle();
     game.spawned = 6;
-    game.enemies = [{ id: 100, distance: PATH_LENGTH - 1, ...pointOnPath(PATH_LENGTH - 1), hp: 12, maxHp: 30 }];
+    game.enemies = [{ id: 100, kind: 'mist', lastDamageTick: 0, distance: PATH_LENGTH - 1, ...pointOnPath(PATH_LENGTH - 1), hp: 12, maxHp: 30 }];
     game.projectiles = [{ id: 101, targetId: 100, ...pointOnPath(PATH_LENGTH), damage: 12 }]; game.step();
     expect(game.phase).toBe('lost'); expect(game.heart).toBe(0); expect(game.continueRoute()).toBe(false);
 });
@@ -136,8 +136,8 @@ test('arriving at the base takes priority over a lethal projectile in the same t
 test('pets persist across every layer of a 30-node expedition while dew resets to 60', () => {
     const game = new MvpSession(123); let previousIds: number[] = [];
     const squad: { species: PetId; slot: number }[] = [
-        { species: 'cat', slot: 0 }, { species: 'rabbit', slot: 4 }, { species: 'deer', slot: 1 },
-        { species: 'mushroom', slot: 5 }, { species: 'rabbit', slot: 7 }, { species: 'cat', slot: 8 },
+        { species: 'cat', slot: 0 }, { species: 'rabbit', slot: 4 }, { species: 'deer', slot: 5 },
+        { species: 'mushroom', slot: 9 }, { species: 'rabbit', slot: 6 }, { species: 'cat', slot: 8 },
     ];
     for (let depth = 0; depth < game.routeDepths; depth++) {
         const id = game.available[0].id;
@@ -148,7 +148,7 @@ test('pets persist across every layer of a 30-node expedition while dew resets t
         }
         previousIds = game.pets.map(p => p.id);
         game.startBattle(); advance(game, 90);
-        expect(game.phase, id).toBe('won'); expect(game.heart).toBe(1);
+        expect(game.phase, `${id}: ${game.enemies.map(e => e.kind + '=' + Math.round(e.hp)).join(',')}`).toBe('won'); expect(game.heart).toBe(1);
         const dew = game.dew; game.step(); expect(game.dew).toBe(dew); game.continueRoute();
     }
     expect(game.phase).toBe('complete'); expect(game.visited).toHaveLength(game.routeDepths);
@@ -166,7 +166,7 @@ function auraArena(): MvpSession {
     game.current = { ...game.current, speed: 0 };
     game.spawned = game.current.count;
     game.enemies = [210, 330, 600].map((travel, i) =>
-        ({ id: 100 + i, distance: travel, ...pointOnPath(travel), hp: 100, maxHp: 100 }));
+        ({ id: 100 + i, kind: 'mist' as const, lastDamageTick: 0, distance: travel, ...pointOnPath(travel), hp: 100, maxHp: 100 }));
     return game;
 }
 
