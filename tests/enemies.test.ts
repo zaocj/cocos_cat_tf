@@ -86,7 +86,9 @@ test('a planned mixed squad can finish 100 seeded expeditions with normal earned
     for (let seed = 0; seed < 100; seed++) {
         const game = new MvpSession(seed);
         for (let depth = 0; depth < game.routeDepths; depth++) {
-            const node = game.available[seed % 2 ? game.available.length - 1 : 0]; expect(game.chooseNode(node.id)).toBe(true);
+            const node = game.available[seed % 2 ? game.available.length - 1 : 0];
+            const carried = game.dew; expect(game.chooseNode(node.id)).toBe(true); expect(game.dew).toBe(carried);
+            if (game.phase === 'rest') { expect(game.takeRest('dew')).toBe(true); continue; }
             const buy = (): void => {
                 while (game.pets.length < squad.length && game.dew >= 30) {
                     const next = squad[game.pets.length]; expect(game.summonPet(next.species, next.slot).ok).toBe(true);
@@ -103,7 +105,7 @@ test('a planned mixed squad can finish 100 seeded expeditions with normal earned
     }
 });
 
-test('one cat alone no longer clears the first encounter without adding defenses', () => {
+test('one cat alone leaks enemies without adding defenses', () => {
     const game = new MvpSession(); game.chooseNode(game.available[0].id); game.summonPet('cat', 0); game.startBattle();
-    advance(game, 90 / STEP); expect(game.phase).toBe('lost');
+    advance(game, 90 / STEP); expect(game.heart).toBeLessThan(game.maxHeart); expect(game.leaked).toBeGreaterThan(0);
 });

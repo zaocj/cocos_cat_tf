@@ -1,7 +1,8 @@
 import { ENEMY_BALANCE, EncounterKind, encounterAt, waveFor, EnemyKind } from './EnemyConfig';
 
+export type RouteNodeKind = 'battle' | 'rest';
 export interface RouteNode {
-    id: string; name: string; detail: string; depth: number; x: number; y: number;
+    id: string; name: string; detail: string; kind: RouteNodeKind; depth: number; x: number; y: number;
     count: number; hp: number; speed: number; children: string[];
     encounter: EncounterKind; wave: EnemyKind[];
 }
@@ -30,14 +31,16 @@ export function generateRoute(seed: number): RouteNode[] {
         return Array.from({ length: width }, (_, lane): RouteNode => {
             const final = depth === ROUTE_DEPTHS - 1;
             const encounter = encounterAt(depth, lane);
-            const count = depth === 0 ? 6 + lane : Math.min(15, 6 + Math.floor(depth * 0.6) + Math.floor(random() * 3)) - (encounter === 'boss' ? 2 : 0);
+            const kind: RouteNodeKind = depth === 3 || (depth === 1 && lane === 0) || (depth === 7 && lane % 2 === 0) || (depth === 10 && lane === 0) ? 'rest' : 'battle';
+            const battleCount = depth === 0 ? 6 + lane : Math.min(15, 6 + Math.floor(depth * 0.6) + Math.floor(random() * 3)) - (encounter === 'boss' ? 2 : 0);
+            const count = kind === 'rest' ? 0 : battleCount;
             return {
-                id: `route-${depth}-${lane}`, name: final ? '噬雾王座' : encounter === 'boss' ? '雾冠之巢' : names[Math.floor(random() * names.length)],
+                id: `route-${depth}-${lane}`, kind, name: kind === 'rest' ? '静露营地' : final ? '噬雾王座' : encounter === 'boss' ? '雾冠之巢' : names[Math.floor(random() * names.length)],
                 depth, x: Math.round((width === 1 ? 0 : -spread + lane * spread * 2 / (width - 1)) + (random() - 0.5) * 32),
-                y: 140 + depth * 240, count, encounter, wave: waveFor(depth, count, encounter),
+                y: 140 + depth * 240, count, encounter, wave: kind === 'rest' ? [] : waveFor(depth, count, encounter),
                 hp: ENEMY_BALANCE.startHp + depth * ENEMY_BALANCE.hpPerDepth + (depth === 0 ? 0 : Math.floor(random() * 9)),
                 speed: depth === 0 ? 65 : 65 + Math.min(20, depth + Math.floor(random() * 7)),
-                detail: `${encounter === 'boss' ? 'BOSS' : encounter === 'elite' ? '精英' : '混合'} · ${count} 只雾兽`, children: [],
+                detail: kind === 'rest' ? '灵露 / 树心' : `${encounter === 'boss' ? 'BOSS' : encounter === 'elite' ? '精英' : '混合'} · ${count} 只雾兽`, children: [],
             };
         });
     });

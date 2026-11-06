@@ -2,13 +2,14 @@ import { ENEMIES, ENEMY_BALANCE, EnemyKind } from './EnemyConfig';
 import { generateRoute, RouteNode, ROUTE_DEPTHS } from './ExpeditionRoute';
 export type { RouteNode } from './ExpeditionRoute';
 
-/** The MVP intentionally ends on the first leak. Full V0.1 rules are separate. */
-export type Phase = 'map' | 'prepare' | 'battle' | 'won' | 'lost' | 'complete';
+/** Expedition resources persist until a new run; only zero tree health ends the run. */
+export type Phase = 'map' | 'rest' | 'prepare' | 'battle' | 'won' | 'lost' | 'complete';
+export type RestChoice = 'dew' | 'heal';
 export type PetId = 'cat' | 'rabbit' | 'deer' | 'mushroom';
 export interface Point { x: number; y: number }
 export const STEP = 1 / 30;
 export const ECONOMY = {
-    startingDew: 60, summonCost: 30, dewPerSecond: 2,
+    startingDew: 60, summonCost: 30, restDew: 45, restHeal: 1, maxHeart: 3,
     deploymentLimit: 6, rosterLimit: 12, relocationTicks: 30,
 } as const;
 export const PET_ORDER: readonly PetId[] = ['cat', 'rabbit', 'deer', 'mushroom'];
@@ -62,11 +63,13 @@ export class MvpSession {
     constructor(readonly seed = 1) { this.route = generateRoute(seed); }
 
     phase: Phase = 'map';
-    heart = 1;
+    readonly maxHeart = ECONOMY.maxHeart;
+    heart: number = this.maxHeart;
     dew: number = ECONOMY.startingDew;
     paused = false;
     tick = 0;
     kills = 0;
+    leaked = 0;
     spawned = 0;
     visited: string[] = [];
     current: RouteNode | null = null;
@@ -87,13 +90,24 @@ export class MvpSession {
         const choice = this.available.find(n => n.id === id);
         if (!choice) return false;
         this.current = choice;
-        this.phase = 'prepare';
-        this.tick = 0; this.spawned = 0; this.kills = 0;
+        this.phase = choice.kind === 'rest' ? 'rest' : 'prepare';
+        this.tick = 0; this.spawned = 0; this.kills = 0; this.leaked = 0;
         this.nextSpawn = 1; this.enemies = []; this.projectiles = []; this.marks = [];
-        this.dew = ECONOMY.startingDew; this.paused = false;
+        this.paused = false;
         // The MVP uses the same battlefield in every encounter: keep the squad and its slots.
         for (const pet of this.pets) { pet.cooldown = 0; pet.lastAttack = -10; pet.readyTick = 0; }
         return true;
+    }
+
+    takeRest(choice: RestChoice): boolean {
+        if (this.phase !== 'rest' || this.current?.kind !== 'rest' || this.heart <= 0) return false;
+        if (choice === 'dew') this.dew += ECONOMY.restDew;
+        else if (choice === 'heal' && this.heart < this.maxHeart)
+            this.heart = Math.min(this.maxHeart, this.heart + ECONOMY.restHeal);
+        else return false;
+        // Resolve the choice and visit atomically. A repeated click cannot receive both rewards.
+        this.phase = 'won';
+        return this.continueRoute();
     }
 
     get deployedCount(): number { return this.pets.filter(p => p.slot !== null).length; }
@@ -198,18 +212,21 @@ export class MvpSession {
             const rage = enemy.kind === 'boss' && enemy.hp <= enemy.maxHp * 0.5 ? ENEMY_BALANCE.bossRageSpeed : 1;
             enemy.distance += encounter.speed * spec.speed * rage * STEP;
             const p = pointOnPath(enemy.distance); enemy.x = p.x; enemy.y = p.y;
-            // MVP contract: reaching the base ends the run before any same-tick hit.
+            // Escaped enemies damage the tree before any same-tick hit, and grant no loot.
             if (enemy.distance >= PATH_LENGTH) {
-                this.heart = 0; this.phase = 'lost'; return;
+                this.heart = Math.max(0, this.heart - 1); this.leaked++;
+                if (this.heart === 0) {
+                    this.enemies = this.enemies.filter(e => e.distance < PATH_LENGTH);
+                    this.phase = 'lost'; return;
+                }
             }
         }
+        this.enemies = this.enemies.filter(e => e.distance < PATH_LENGTH);
         for (const enemy of this.enemies) {
             const regen = ENEMIES[enemy.kind].regeneration;
             if (enemy.hp > 0 && regen && this.tick - enemy.lastDamageTick >= ENEMY_BALANCE.regenDelayTicks)
                 enemy.hp = Math.min(enemy.maxHp, enemy.hp + enemy.maxHp * regen * STEP);
         }
-        // Integer tick boundaries avoid floating-point drift and grant no income while paused/preparing.
-        if (this.tick % 30 === 0) this.dew += ECONOMY.dewPerSecond;
         for (const pet of this.pets) {
             if (pet.slot === null || pet.species === 'deer') continue;
             pet.cooldown = Math.max(0, pet.cooldown - STEP);

@@ -2,7 +2,7 @@ import {
     _decorator, BlockInputEvents, Color, Component, EventKeyboard, EventTouch, game, Game, Graphics, input, Input,
     KeyCode, Label, Layers, Mask, Node, profiler, ResolutionPolicy, screen, UITransform, Vec3, view,
 } from 'cc';
-import { ActionError, ECONOMY, MvpSession, PATH, PETS, PET_ORDER, PetActionResult, PetId, SLOTS, STEP, EnemyState } from '../domain/MvpSession';
+import { ActionError, ECONOMY, MvpSession, PATH, PETS, PET_ORDER, PetActionResult, PetId, SLOTS, STEP, EnemyState, RestChoice } from '../domain/MvpSession';
 import { isPortrait, PortraitLayout, portraitLayout, portraitSlotAt, PORTRAIT_MIN_HEIGHT, PORTRAIT_WIDTH, toPortraitBoard } from './PortraitLayout';
 
 import { GameToast } from './GameToast';
@@ -58,6 +58,7 @@ export class MvpGame extends Component {
     private enemyLabels = new Map<number, Label>();
     private announcedEnemies = new Set<number>();
     private bossStatus: Label | null = null;
+    private heartLabel: Label | null = null;
     private dewLabel: Label | null = null;
     private deploymentLabel: Label | null = null;
     private infoTitle: Label | null = null;
@@ -99,6 +100,7 @@ export class MvpGame extends Component {
         this.onViewportResize();
     }
     update(dt: number): void {
+        const heartBefore = this.session.heart;
         const drag = this.summonDrag;
         if (drag) {
             drag.elapsed = Math.max(drag.elapsed + Math.min(dt, 0.1), (this.gestureTime() - drag.startedAt) / 1000);
@@ -113,6 +115,8 @@ export class MvpGame extends Component {
                 if (this.session.phase !== 'battle') { this.accumulator = 0; this.renderScreen(); break; }
             }
         }
+        if (this.session.heart > 0 && this.session.heart < heartBefore)
+            this.toast?.show(`雾兽突破，树心 -${heartBefore - this.session.heart}（${this.session.heart}/${this.session.maxHeart}）`, { tone: 'warning' });
         for (const enemy of this.session.enemies) {
             if ((enemy.kind === 'elite' || enemy.kind === 'boss') && !this.announcedEnemies.has(enemy.id)) {
                 this.announcedEnemies.add(enemy.id);
@@ -398,7 +402,7 @@ export class MvpGame extends Component {
         this.summonDrag = null;
         if (this.screenRoot) { this.screenRoot.removeFromParent(); this.screenRoot.destroy(); }
         this.dynamic = null; this.dragVisual = null; this.status = null; this.counter = null; this.lastStatus = ''; this.lastCounter = '';
-        this.dewLabel = null; this.deploymentLabel = null;
+        this.heartLabel = null; this.dewLabel = null; this.deploymentLabel = null;
         this.infoTitle = null; this.infoStats = null; this.infoEffect = null; this.infoMeta = null; this.infoAction = null;
         const root = this.uiNode('PortraitMVP', this.node); this.screenRoot = root;
         this.toast?.node.setSiblingIndex(this.node.children.length - 1);
@@ -410,8 +414,9 @@ export class MvpGame extends Component {
             return;
         }
         this.text(root, '萌宠变异录', -110, this.layout.top - 46, 32, 420, C.ink, true, true);
-        this.text(root, `树心 ${this.session.heart}/1`, 240, this.layout.top - 46, 24, 170, C.green);
+        this.heartLabel = this.text(root, `树心 ${this.session.heart}/${this.session.maxHeart}`, 240, this.layout.top - 46, 24, 170, this.session.heart <= 1 ? C.red : C.green);
         if (this.session.phase === 'map' || this.session.phase === 'complete') this.drawMap(root, g);
+        else if (this.session.phase === 'rest') this.drawRest(root, g);
         else this.drawBattle(root, g);
     }
 
@@ -419,7 +424,8 @@ export class MvpGame extends Component {
         const { top, bottom } = this.layout;
         const complete = this.session.phase === 'complete';
         this.text(root, `${complete ? '远征完成' : '远征路线'}  ${this.session.visited.length} / ${this.session.routeDepths} · 30 节点`,
-            0, top - 92, 24, 656, C.muted, false, false, 40);
+            -110, top - 92, 24, 420, C.muted, false, false, 40);
+        this.text(root, `灵露 ${this.session.dew}`, 236, top - 92, 26, 180, C.green, false, true, 40);
         const mapTop = top - 206; const mapBottom = bottom + 28;
         const height = mapTop - mapBottom; const center = (mapTop + mapBottom) / 2;
         this.rect(g, 0, center, 656, height, C.board, 22);
@@ -446,6 +452,25 @@ export class MvpGame extends Component {
         this.button(root, '+', 282, top - 151, 80, 80, () => map.zoomBy(0.15), C.pale, C.ink);
     }
 
+    private drawRest(root: Node, g: Graphics): void {
+        this.text(root, `静露营地 · 第 ${this.session.visited.length + 1} 站`, 0, 360, 38, 656, C.green, false, true, 70);
+        this.text(root, '选择一项补给', 0, 295, 26, 600, C.muted);
+        this.circle(g, 0, 140, 100, C.board);
+        this.tree(g, 0, 110, 1.5);
+        this.text(root, `灵露 ${this.session.dew} · 树心 ${this.session.heart}/${this.session.maxHeart}`, 0, 15, 28, 600, C.ink, false, true);
+        const choose = (choice: RestChoice): void => {
+            const before = this.session.heart;
+            if (!this.session.takeRest(choice)) return;
+            this.mapCamera = null; this.clearFeedback(); this.renderScreen();
+            this.toast?.show(choice === 'dew' ? `获得 ${ECONOMY.restDew} 灵露` : `树心恢复 +${this.session.heart - before}`, { tone: 'success' });
+        };
+        this.button(root, `收集灵露\n获得 ${ECONOMY.restDew} 灵露`, 0, -110, 600, 144, () => choose('dew'));
+        const injured = this.session.heart < this.session.maxHeart;
+        this.button(root, injured ? `滋养树心\n恢复 ${ECONOMY.restHeal} 点树心` : '滋养树心\n树心已满',
+            0, -295, 600, 144, () => choose('heal'), C.white, C.green, injured);
+        this.text(root, '每处营地只能选择一次', 0, -410, 24, 600, C.muted);
+    }
+
     private drawBattle(root: Node, g: Graphics): void {
         const session = this.session; const current = session.current;
         if (!current) return;
@@ -455,7 +480,7 @@ export class MvpGame extends Component {
         this.text(root, current.encounter === 'boss' ? 'BOSS 战 · 半血狂暴' : current.encounter === 'elite' ? '精英战 · 大型雾兽' : '雾团 / 疾风 / 岩甲', -185, top - 167, 19, 260, current.encounter === 'normal' ? C.muted : C.red, false, false, 32);
         this.text(root, `${current.name} · 第 ${session.visited.length + 1} 站`, -185, top - 132, 22, 250, C.ink, false, true, 36);
         this.dewLabel = this.text(root, '', 140, top - 134, 32, 330, C.green, false, true, 48);
-        this.text(root, `战斗 +${ECONOMY.dewPerSecond}/秒 · 击杀 +${ENEMIES.mist.reward}～${ENEMIES.boss.reward}`, 140, top - 169, 22, 330, C.muted, false, false, 32);
+        this.text(root, `击杀 +${ENEMIES.mist.reward}～${ENEMIES.boss.reward} 灵露`, 140, top - 169, 22, 330, C.muted, false, false, 32);
         this.rect(g, 0, arenaCenter, 656, arenaHeight, C.board, 22);
         for (let i = 0; i < 18; i++) {
             this.circle(g, i % 2 === 0 ? -290 : 290, this.layout.arenaBottom + 38 + (i * 97 % (arenaHeight - 76)), 4 + i % 3, '#BCCFAC');
@@ -556,6 +581,11 @@ export class MvpGame extends Component {
     }
 
     private updateHud(): void {
+        const heartText = `树心 ${this.session.heart}/${this.session.maxHeart}`;
+        if (this.heartLabel && this.heartLabel.string !== heartText) {
+            this.heartLabel.string = heartText;
+            this.heartLabel.color = color(this.session.heart <= 1 ? C.red : C.green);
+        }
         if (!this.status || !this.counter || !this.session.current) return;
         const phase = this.session.phase;
         const unaffordable = this.session.dew < ECONOMY.summonCost;
@@ -566,13 +596,13 @@ export class MvpGame extends Component {
         const action = this.selected.kind === 'summon'
             ? `拖动${PETS[this.selected.species].name}头像到空树桩，或点击树桩召唤 · ${ECONOMY.summonCost} 灵露`
             : pet ? `已选${PETS[pet.species].name} #${pet.id}：长按拖到空位搬迁，卡片可收回后备` : '请选择召唤卡片或场上宠物';
-        const text = phase === 'lost' ? '树心受损，本次远征结束。'
+        const text = phase === 'lost' ? '树心耗尽，本次远征结束。'
                 : phase === 'won' ? '这一站守住了，准备前往下一段旅程。'
-                    : this.session.paused ? '已暂停：灵露和战斗均冻结，请继续后再召唤或搬迁'
+                    : this.session.paused ? '已暂停，请继续后再召唤或搬迁'
                         : this.summonDrag?.active ? '范围随落点预览，拖到空树桩后松手放置'
                             : this.feedback || action;
         const count = phase === 'prepare' ? `即将来袭 ${this.session.current.count} 只 · ${this.session.current.encounter === "boss" ? "BOSS 压轴" : this.session.current.encounter === "elite" ? "精英压阵" : "混合雾兽"}`
-            : `已击退 ${this.session.kills} / ${this.session.current.count} · 场上 ${this.session.enemies.length}`;
+            : `击退 ${this.session.kills}/${this.session.current.count} · 漏过 ${this.session.leaked} · 场上 ${this.session.enemies.length}`;
         if (text !== this.lastStatus) { this.status.string = text; this.lastStatus = text; }
         if (count !== this.lastCounter) { this.counter.string = count; this.lastCounter = count; }
         const dewText = `灵露  ${this.session.dew}`;
@@ -799,9 +829,9 @@ export class MvpGame extends Component {
         const shade = this.graphics(modal); shade.fillColor = color(C.ink, 145);
         shade.rect(-360, -this.layout.top, 720, this.layout.height); shade.fill();
         this.rect(shade, 0, 0, 640, 440, C.white, 20);
-        this.text(modal, won ? '这一站，守住了。' : '树心受伤了。', 0, 128, 36, 590, won ? C.green : C.red, false, true, 84);
-        this.text(modal, won ? `击退 ${this.session.kills} 只雾兽\n带着萌宠小队，继续出发。`
-            : '敌人突破防线，树心 1 → 0。\n换个位置，再试一次。', 0, 20, 26, 580, C.muted, false, false, 110);
+        this.text(modal, won ? '这一站，守住了。' : '树心耗尽了。', 0, 128, 36, 590, won ? C.green : C.red, false, true, 84);
+        this.text(modal, won ? `击退 ${this.session.kills} 只 · 漏过 ${this.session.leaked} 只\n树心 ${this.session.heart}/${this.session.maxHeart} · 灵露 ${this.session.dew}`
+            : '雾兽突破防线，摇篮树失去生机。\n整理阵容，再次出发。', 0, 20, 26, 580, C.muted, false, false, 110);
         this.button(modal, won ? (this.session.current?.children.length ? '继续选择路线' : '抵达净土') : '重新选择路线',
             0, -134, 560, 84, () => {
                 if (won) { this.session.continueRoute(); this.mapCamera = null; this.reservesOpen = false; this.clearFeedback(); this.renderScreen(); }

@@ -37,29 +37,31 @@ test('60 starting dew pays for two distinct same-species pets; rejected summons 
     expect(game.dew).toBe(0); expect(game.pets.length).toBe(2);
 });
 
-test('passive income grants 2 dew per simulation second, never during preparation or pause', () => {
+test('time grants no dew in preparation, combat or pause', () => {
     const game = new MvpSession(); game.step(); expect(game.dew).toBe(60);
     game.chooseNode(game.available[0].id); game.step(); expect(game.tick).toBe(0);
     game.startBattle(); advance(game, 29 * STEP); expect(game.dew).toBe(60);
-    game.step(); expect(game.dew).toBe(62);
+    game.step(); expect(game.dew).toBe(60);
     game.setPaused(true); const tick = game.tick; advance(game, 4);
-    expect(game.dew).toBe(62); expect(game.tick).toBe(tick);
+    expect(game.dew).toBe(60); expect(game.tick).toBe(tick);
     expect(game.summonPet('cat', 0)).toStrictEqual({ ok: false, reason: 'PAUSED' });
-    game.setPaused(false); advance(game, 1); expect(game.dew).toBe(64);
+    game.setPaused(false); advance(game, 1); expect(game.dew).toBe(60);
 });
 
-test('a kill awards exactly 2 dew and cannot be collected again', () => {
+test('a kill awards exactly 6 dew and cannot be collected again', () => {
     const game = new MvpSession(); game.chooseNode(game.available[0].id); summon(game, 'cat', 0); game.startBattle();
     game.enemies = [{ id: 100, kind: 'mist', lastDamageTick: 0, distance: 210, ...pointOnPath(210), hp: 24, maxHp: 24 }];
-    game.step(); expect(game.kills).toBe(1); expect(game.dew).toBe(32);
-    game.step(); expect(game.kills).toBe(1); expect(game.dew).toBe(32);
+    game.step(); expect(game.kills).toBe(1); expect(game.dew).toBe(36);
+    game.step(); expect(game.kills).toBe(1); expect(game.dew).toBe(36);
 });
 
 test('earned dew can summon another pet during combat', () => {
     const game = new MvpSession(); game.chooseNode(game.available[0].id);
     summon(game, 'cat', 0); summon(game, 'rabbit', 4); game.startBattle();
-    for (let i = 0; i < 900 && game.dew < 30 && game.phase === 'battle'; i++) game.step();
-    expect(game.phase).toBe('battle'); expect(game.dew >= 30).toBeTruthy();
+    game.enemies = Array.from({ length: 5 }, (_, i) => ({ id: 100 + i, kind: 'mist' as const,
+        lastDamageTick: 0, distance: 210, ...pointOnPath(210), hp: 1, maxHp: 96 }));
+    game.projectiles = game.enemies.map(e => ({ id: e.id + 1000, targetId: e.id, ...pointOnPath(e.distance), damage: 100 }));
+    game.step(); expect(game.phase).toBe('battle'); expect(game.dew).toBe(30);
     const before = game.dew; const third = summon(game, 'rabbit', 1);
     expect(third.slot).toBe(1); expect(game.dew).toBe(before - 30); expect(game.deployedCount).toBe(3);
 });
@@ -107,7 +109,7 @@ test('the roster limit cannot be bypassed by recalling existing pets', () => {
     expect(game.dew).toBe(before); expect(game.pets.length).toBe(ECONOMY.rosterLimit);
 });
 
-test('first leak ends the game; further steps and purchases cannot generate or consume dew', () => {
+test('zero tree health ends the game; further steps and purchases cannot generate or consume dew', () => {
     const game = new MvpSession(); game.chooseNode(game.available[0].id); game.startBattle(); advance(game, 70);
     expect(game.heart).toBe(0); expect(game.phase).toBe('lost');
     const tick = game.tick; const dew = game.dew; advance(game, 10); game.step();
@@ -127,28 +129,35 @@ test('ranged pet fires tracking projectiles; melee deals damage without a projec
 
 test('arriving at the base takes priority over a lethal projectile in the same tick', () => {
     const game = new MvpSession(); game.chooseNode(game.available[0].id); game.startBattle();
-    game.spawned = 6;
+    game.spawned = 6; game.heart = 1;
     game.enemies = [{ id: 100, kind: 'mist', lastDamageTick: 0, distance: PATH_LENGTH - 1, ...pointOnPath(PATH_LENGTH - 1), hp: 12, maxHp: 30 }];
     game.projectiles = [{ id: 101, targetId: 100, ...pointOnPath(PATH_LENGTH), damage: 12 }]; game.step();
     expect(game.phase).toBe('lost'); expect(game.heart).toBe(0); expect(game.continueRoute()).toBe(false);
 });
 
-test('pets persist across every layer of a 30-node expedition while dew resets to 60', () => {
+test('pets, tree health and remaining dew persist across battles and rest nodes', () => {
     const game = new MvpSession(123); let previousIds: number[] = [];
     const squad: { species: PetId; slot: number }[] = [
         { species: 'cat', slot: 0 }, { species: 'rabbit', slot: 4 }, { species: 'deer', slot: 5 },
         { species: 'mushroom', slot: 9 }, { species: 'rabbit', slot: 6 }, { species: 'cat', slot: 8 },
     ];
     for (let depth = 0; depth < game.routeDepths; depth++) {
-        const id = game.available[0].id;
-        expect(game.chooseNode(id)).toBe(true); expect(game.dew).toBe(60);
+        const id = game.available[0].id; const before = game.dew;
+        expect(game.chooseNode(id)).toBe(true); expect(game.dew).toBe(before);
         expect(game.pets.map(p => p.id)).toStrictEqual(previousIds);
-        while (game.pets.length < squad.length && game.dew >= ECONOMY.summonCost) {
-            const next = squad[game.pets.length]; summon(game, next.species, next.slot);
+        if (game.phase === 'rest') {
+            expect(game.takeRest('dew')).toBe(true); expect(game.dew).toBe(before + ECONOMY.restDew); continue;
         }
+        const buy = (): void => {
+            while (game.pets.length < squad.length && game.dew >= ECONOMY.summonCost) {
+                const next = squad[game.pets.length]; summon(game, next.species, next.slot);
+            }
+        };
+        buy(); game.startBattle();
+        for (let tick = 0; tick < 90 / STEP && game.phase === 'battle'; tick++) { buy(); game.step(); }
         previousIds = game.pets.map(p => p.id);
-        game.startBattle(); advance(game, 90);
-        expect(game.phase, `${id}: ${game.enemies.map(e => e.kind + '=' + Math.round(e.hp)).join(',')}`).toBe('won'); expect(game.heart).toBe(1);
+        expect(game.phase, `${id}: ${game.enemies.map(e => e.kind + '=' + Math.round(e.hp)).join(',')}`).toBe('won');
+        expect(game.heart).toBe(game.maxHeart);
         const dew = game.dew; game.step(); expect(game.dew).toBe(dew); game.continueRoute();
     }
     expect(game.phase).toBe('complete'); expect(game.visited).toHaveLength(game.routeDepths);
@@ -211,8 +220,8 @@ test('support boosts mushroom damage and pause or relocation freezes its effect'
 test('aura kills award dew once per enemy and never remove the caster', () => {
     const game = auraArena(); const mushroom = summon(game, 'mushroom', 0);
     game.enemies[0].hp = 8; game.enemies[1].hp = 8; game.startBattle();
-    const before = game.dew; game.step(); expect(game.kills).toBe(2); expect(game.dew).toBe(before + 4);
-    game.step(); expect(game.dew).toBe(before + 4); expect(game.pets.includes(mushroom)).toBeTruthy();
+    const before = game.dew; game.step(); expect(game.kills).toBe(2); expect(game.dew).toBe(before + 12);
+    game.step(); expect(game.dew).toBe(before + 12); expect(game.pets.includes(mushroom)).toBeTruthy();
 });
 
 test('ranged projectiles snapshot the supported attack at launch', () => {
