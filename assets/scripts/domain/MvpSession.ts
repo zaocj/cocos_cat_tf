@@ -1,11 +1,10 @@
+import { generateRoute, RouteNode, ROUTE_DEPTHS } from './ExpeditionRoute';
+export type { RouteNode } from './ExpeditionRoute';
+
 /** The MVP intentionally ends on the first leak. Full V0.1 rules are separate. */
 export type Phase = 'map' | 'prepare' | 'battle' | 'won' | 'lost' | 'complete';
 export type PetId = 'cat' | 'rabbit' | 'deer' | 'mushroom';
 export interface Point { x: number; y: number }
-export interface RouteNode extends Point {
-    id: string; name: string; detail: string; depth: number;
-    count: number; hp: number; speed: number; children: string[];
-}
 export const STEP = 1 / 30;
 export const ECONOMY = {
     startingDew: 60, summonCost: 30, dewPerSecond: 2, dewPerKill: 2,
@@ -29,18 +28,6 @@ export const SLOTS: readonly Point[] = [
     { x: -200, y: 80 }, { x: -80, y: 80 }, { x: 40, y: 80 }, { x: 160, y: 80 },
     { x: -160, y: -80 }, { x: -40, y: -80 }, { x: 80, y: -80 }, { x: 200, y: -80 },
     { x: -200, y: -240 }, { x: -80, y: -240 }, { x: 40, y: -240 }, { x: 160, y: -240 },
-];
-export const ROUTE: readonly RouteNode[] = [
-    { id: 'grove', name: '绒芽小径', detail: '6 只雾团 · 行进缓慢', depth: 0, x: 30, y: -175,
-        count: 6, hp: 30, speed: 65, children: ['bend', 'rush'] },
-    { id: 'creek', name: '溪畔岔路', detail: '7 只雾团 · 数量稍多', depth: 0, x: 270, y: -175,
-        count: 7, hp: 28, speed: 70, children: ['rush'] },
-    { id: 'bend', name: '回环林地', detail: '8 只雾团 · 生命增加', depth: 1, x: 30, y: 5,
-        count: 8, hp: 40, speed: 68, children: ['heart'] },
-    { id: 'rush', name: '疾风草坡', detail: '8 只雾团 · 行进更快', depth: 1, x: 270, y: 5,
-        count: 8, hp: 34, speed: 85, children: ['heart'] },
-    { id: 'heart', name: '树心守卫', detail: '10 只雾团 · 最终防守', depth: 2, x: 150, y: 185,
-        count: 10, hp: 48, speed: 75, children: [] },
 ];
 export interface PetState {
     id: number; species: PetId; slot: number | null;
@@ -69,6 +56,10 @@ export function pointOnPath(travel: number): Point {
 }
 
 export class MvpSession {
+    readonly route: readonly RouteNode[];
+    readonly routeDepths = ROUTE_DEPTHS;
+    constructor(readonly seed = 1) { this.route = generateRoute(seed); }
+
     phase: Phase = 'map';
     heart = 1;
     dew: number = ECONOMY.startingDew;
@@ -87,8 +78,8 @@ export class MvpSession {
 
     get available(): readonly RouteNode[] {
         if (this.phase !== 'map') return [];
-        const last = ROUTE.find(n => n.id === this.visited[this.visited.length - 1]);
-        return ROUTE.filter(n => last ? last.children.includes(n.id) : n.depth === 0);
+        const last = this.route.find(n => n.id === this.visited[this.visited.length - 1]);
+        return this.route.filter(n => last ? last.children.includes(n.id) : n.depth === 0);
     }
 
     chooseNode(id: string): boolean {

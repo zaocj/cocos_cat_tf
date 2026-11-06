@@ -2,17 +2,20 @@ import {
     _decorator, BlockInputEvents, Color, Component, EventKeyboard, EventTouch, game, Game, Graphics, input, Input,
     KeyCode, Label, Layers, Mask, Node, profiler, ResolutionPolicy, screen, UITransform, Vec3, view,
 } from 'cc';
-import { ActionError, ECONOMY, MvpSession, PATH, PETS, PET_ORDER, PetActionResult, PetId, ROUTE, SLOTS, STEP } from '../domain/MvpSession';
+import { ActionError, ECONOMY, MvpSession, PATH, PETS, PET_ORDER, PetActionResult, PetId, SLOTS, STEP } from '../domain/MvpSession';
 import { isPortrait, PortraitLayout, portraitLayout, portraitSlotAt, PORTRAIT_MIN_HEIGHT, PORTRAIT_WIDTH, toPortraitBoard } from './PortraitLayout';
 
 import { GameToast } from './GameToast';
+import { ROUTE_BOUNDS } from '../domain/ExpeditionRoute';
+import { RouteMapViewport } from './RouteMapViewport';
+import { RouteMapView } from './RouteMapView';
 
 const { ccclass } = _decorator;
 type Selection = { kind: 'summon'; species: PetId } | { kind: 'pet'; id: number };
 interface SummonDrag {
     touchId: number; species: PetId;
     start: { x: number; y: number }; point: { x: number; y: number }; moved: boolean;
-    selection: Selection | null; originSlot: number | null; elapsed: number; active: boolean; startedAt: number; warnedInsufficientDew: boolean;
+    selection: Selection | null; originSlot: number | null; elapsed: number; active: boolean; startedAt: number;
 }
 const C = {
     bg: '#EDF3E7', ink: '#234235', muted: '#526A58', green: '#337354', pale: '#D9E6D0',
@@ -25,10 +28,22 @@ function color(hex: string, alpha = 255): Color {
     return new Color(parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16), alpha);
 }
 
+let lastRunSeed = 0;
+function freshSession(): MvpSession {
+    // Entropy is chosen only at the UI boundary, never from battle timing or random attacks.
+    const data = new Uint32Array(1);
+    let seed = typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function'
+        ? crypto.getRandomValues(data)[0] : Date.now() >>> 0;
+    if (seed === lastRunSeed) seed = (seed + 1) >>> 0;
+    lastRunSeed = seed;
+    return new MvpSession(seed);
+}
+
 /** Asset-free playable slice. All gameplay decisions live in MvpSession. */
 @ccclass('MvpGame')
 export class MvpGame extends Component {
-    private session = new MvpSession();
+    private session = freshSession();
+    private mapCamera: RouteMapViewport | null = null;
     private screenRoot: Node | null = null;
     private dynamic: Graphics | null = null;
     private dragVisual: Graphics | null = null;
@@ -82,7 +97,8 @@ export class MvpGame extends Component {
         const drag = this.summonDrag;
         if (drag) {
             drag.elapsed = Math.max(drag.elapsed + Math.min(dt, 0.1), (this.gestureTime() - drag.startedAt) / 1000);
-            if (drag.selection && !this.session.paused && drag.elapsed >= 0.3) drag.active = true;
+            if (!this.canDrag(drag)) drag.active = false;
+            else if (drag.elapsed >= 0.3) drag.active = true;
         }
         if (!this.orientationBlocked && this.session.phase === 'battle' && !this.session.paused) {
             this.accumulator += Math.min(dt, 0.1) * this.speed;
@@ -92,7 +108,6 @@ export class MvpGame extends Component {
                 if (this.session.phase !== 'battle') { this.accumulator = 0; this.renderScreen(); break; }
             }
         }
-        this.warnIfSummonUnaffordable();
         if (this.dynamic) this.drawDynamic(this.dynamic);
         this.updateHud();
     }
@@ -129,7 +144,7 @@ export class MvpGame extends Component {
     }
     private restart(): void {
         this.inspectedPetId = null;
-        this.session = new MvpSession(); this.selected = { kind: 'summon', species: 'cat' }; this.clearFeedback();
+        this.session = freshSession(); this.mapCamera = null; this.selected = { kind: 'summon', species: 'cat' }; this.clearFeedback();
         this.accumulator = 0; this.speed = 1; this.reservesOpen = false; this.renderScreen();
     }
 
@@ -148,7 +163,7 @@ export class MvpGame extends Component {
         else this.handlePetAction(this.session.summonPet(this.selected.species, slot), true);
     }
 
-    private handlePetAction(result: PetActionResult, summoned: boolean, alreadyWarned = false): void {
+    private handlePetAction(result: PetActionResult, summoned: boolean): void {
         this.inspectedPetId = null;
         if (result.ok === false) {
             const messages: Record<ActionError, string> = {
@@ -160,8 +175,7 @@ export class MvpGame extends Component {
             };
             this.feedback = messages[result.reason];
             this.feedbackError = result.reason;
-            if (result.reason !== 'INSUFFICIENT_DEW' || !alreadyWarned)
-                this.toast?.show(this.feedback, { tone: 'warning' });
+            this.toast?.show(this.feedback, { tone: 'warning' });
             this.renderScreen();
         } else {
             this.feedbackError = null;
@@ -191,7 +205,7 @@ export class MvpGame extends Component {
         this.inspectedPetId = selection?.kind === 'pet' ? selection.id : null;
         // Keep the source alive: range and data labels update without rebuilding its touch node.
         this.summonDrag = { touchId, species, selection, originSlot: slot,
-            start: point, point, moved: false, elapsed: 0, active: false, startedAt: this.gestureTime(), warnedInsufficientDew: false };
+            start: point, point, moved: false, elapsed: 0, active: false, startedAt: this.gestureTime() };
         this.clearFeedback();
     }
 
@@ -212,11 +226,11 @@ export class MvpGame extends Component {
         const point = this.touchPoint(event); if (!point) return;
         drag.point = point;
         drag.elapsed = Math.max(drag.elapsed, (this.gestureTime() - drag.startedAt) / 1000);
-        if (drag.selection && drag.elapsed >= 0.3 && !this.session.paused) drag.active = true;
+        if (this.canDrag(drag) && drag.elapsed >= 0.3) drag.active = true;
         if (Math.hypot(point.x - drag.start.x, point.y - drag.start.y) >= 12) drag.moved = true;
         // Summon avatars retain immediate dragging. Deployed pets require a 0.3-second hold.
-        if (drag.selection?.kind === 'summon' && drag.moved && !this.session.paused) drag.active = true;
-        this.warnIfSummonUnaffordable();
+        if (drag.selection?.kind === 'summon' && drag.moved && this.canDrag(drag)) drag.active = true;
+        if (!this.canDrag(drag)) drag.active = false;
     }
 
     private finishSummonDrag(event: EventTouch): void {
@@ -233,7 +247,11 @@ export class MvpGame extends Component {
             if (!drag.moved && drag.originSlot !== null) this.handleSlot(drag.originSlot);
             return;
         }
-        if (!drag.active || !drag.moved || this.session.paused) { this.renderScreen(); return; }
+        if (!drag.active || !drag.moved || this.session.paused) {
+            if (drag.selection.kind === 'summon' && drag.moved && !this.session.paused
+                && this.session.dew < ECONOMY.summonCost) this.toast?.show(this.insufficientDewMessage(), { tone: 'warning' });
+            this.renderScreen(); return;
+        }
         const slot = portraitSlotAt(drag.point, this.layout);
         if (slot === null) { this.feedback = '已取消放置，请拖到空树桩'; this.renderScreen(); return; }
         if (slot === drag.originSlot) { this.renderScreen(); return; }
@@ -243,21 +261,16 @@ export class MvpGame extends Component {
         // Preview changes neither roster nor balance. Commit exactly once on a valid release.
         this.handlePetAction(drag.selection.kind === 'summon'
             ? this.session.summonPet(drag.species, slot) : this.session.movePet(drag.selection.id, slot),
-        drag.selection.kind === 'summon', drag.warnedInsufficientDew);
+        drag.selection.kind === 'summon');
+    }
+
+    private canDrag(drag: SummonDrag): boolean {
+        return !!drag.selection && !this.session.paused
+            && (drag.selection.kind === 'pet' || this.session.dew >= ECONOMY.summonCost);
     }
 
     private insufficientDewMessage(): string {
         return `灵露不足，还差 ${Math.max(0, ECONOMY.summonCost - this.session.dew)} 灵露`;
-    }
-
-    private warnIfSummonUnaffordable(): void {
-        const drag = this.summonDrag;
-        if (!drag?.active || !drag.moved || drag.selection?.kind !== 'summon' || drag.warnedInsufficientDew
-            || this.session.paused || this.orientationBlocked || this.session.dew >= ECONOMY.summonCost) return;
-        if (Math.abs(drag.point.x) > 328 || drag.point.y < this.layout.arenaBottom
-            || drag.point.y > this.layout.arenaTop) return;
-        drag.warnedInsufficientDew = true;
-        this.toast?.show(this.insufficientDewMessage(), { tone: 'warning' });
     }
 
     private bindGesture(node: Node): void {
@@ -384,57 +397,33 @@ export class MvpGame extends Component {
     }
 
     private drawMap(root: Node, g: Graphics): void {
-        const { top, bottom, height } = this.layout;
+        const { top, bottom } = this.layout;
         const complete = this.session.phase === 'complete';
-        this.text(root, `远征路线  ${this.session.visited.length} / 3`, 0, top - 92, 24, 640, C.muted);
-        this.text(root, complete ? '家园，抵达了。' : '选一条路，护送我们的家。', 0, top - 170, 36, 650, C.ink, false, true, 90);
-        this.text(root, complete ? '三场防守完成，萌宠小队守住了摇篮树。' : '每场 60 灵露，选择伙伴守住防线。\n已召唤的小队会陪你继续远征。',
-            0, top - 256, 24, 640, C.muted, false, false, 76);
-        const routeBottom = bottom + 260; const routeHeight = height - 582;
-        this.rect(g, 0, routeBottom + routeHeight / 2, 656, routeHeight, C.board, 22);
-        const positions = new Map(ROUTE.map(n => [n.id, {
-            x: n.depth === 2 ? 0 : n.x < 150 ? -150 : 150,
-            y: routeBottom + 130 + n.depth * (routeHeight - 240) / 2,
-        }]));
-        const available = this.session.available;
-        for (const n of ROUTE) {
-            const a = positions.get(n.id); if (!a) continue;
-            for (const id of n.children) {
-                const b = positions.get(id); if (!b) continue;
-                const walked = this.session.visited.includes(n.id) && this.session.visited.includes(id);
-                this.line(g, a.x, a.y, b.x, b.y, walked ? C.green : C.line, walked ? 5 : 2);
-            }
-        }
-        for (const n of ROUTE) {
-            const point = positions.get(n.id); if (!point) continue;
-            const { x, y } = point; const open = available.some(a => a.id === n.id);
-            const done = this.session.visited.includes(n.id);
-            this.circle(g, x, y, 48, done ? C.green : open ? C.white : '#C6D4BD');
-            if (open) { g.strokeColor = color(C.green); g.lineWidth = 3; g.circle(x, y, 48); g.stroke(); }
-            if (done) {
-                this.line(g, x - 17, y, x - 3, y - 13, C.white, 4); this.line(g, x - 3, y - 13, x + 21, y + 16, C.white, 4);
-            } else if (n.depth === 2) this.tree(g, x, y - 3, 0.6);
-            else { this.circle(g, x, y, 15, open ? C.green : C.muted); this.line(g, x - 22, y + 18, x + 22, y - 18, open ? C.green : C.muted, 3); }
-            this.text(root, n.name, x, y - 69, 26, 270, done || open ? C.ink : C.muted, false, true, 42);
-            const detail = done ? '已守住' : open ? `${n.count} 只雾团` : '沿连线解锁';
-            this.text(root, detail, x, y - 105, 22, 270, C.muted, false, false, 36);
-            if (open) {
-                const hit = this.uiNode(`Route-${n.id}`, root, x, y - 30, 260, 164);
-                hit.on(Node.EventType.TOUCH_END, () => {
-                    if (this.session.chooseNode(n.id)) { this.inspectedPetId = null; this.reservesOpen = false; this.clearFeedback(); this.renderScreen(); }
-                }, this);
-            }
-        }
-        PET_ORDER.forEach((id, i) => {
-            const x = -240 + i * 160;
-            this.petIcon(g, x, bottom + 198, id, 0.95);
-            this.text(root, PETS[id].name, x, bottom + 141, 22, 155, this.petTint(id), false, true, 36);
-        });
-        if (complete) this.button(root, '再出发一次', 0, bottom + 64, 640, 84, () => this.restart());
-        else {
-            this.text(root, '基地一旦受伤，本局立即结束', 0, bottom + 92, 24, 656, C.red);
-            this.text(root, '点击亮起的节点，开始防守', 0, bottom + 40, 22, 656, C.muted);
-        }
+        this.text(root, `${complete ? '远征完成' : '远征路线'}  ${this.session.visited.length} / ${this.session.routeDepths} · 30 节点`,
+            0, top - 92, 24, 656, C.muted, false, false, 40);
+        const mapTop = top - 206; const mapBottom = bottom + 28;
+        const height = mapTop - mapBottom; const center = (mapTop + mapBottom) / 2;
+        this.rect(g, 0, center, 656, height, C.board, 22);
+        const focusNodes = this.session.available;
+        const last = this.session.route.find(n => n.id === this.session.visited[this.session.visited.length - 1]);
+        const focus = focusNodes.length ? {
+            x: focusNodes.reduce((sum, n) => sum + n.x, 0) / focusNodes.length, y: focusNodes[0].y,
+        } : last ?? this.session.route[0];
+        if (!this.mapCamera) {
+            this.mapCamera = new RouteMapViewport(656, height, ROUTE_BOUNDS);
+            this.mapCamera.focus(focus, complete);
+        } else this.mapCamera.resize(656, height);
+        const viewNode = this.uiNode('ExpeditionMap', root, 0, center, 656, height);
+        const map = viewNode.addComponent(RouteMapView);
+        const zoomLabel = this.text(root, '', 190, top - 151, 24, 100, C.ink, false, true, 64);
+        map.setup(this.mapCamera, this.session.route, this.session.visited, focusNodes.map(n => n.id), id => {
+            if (!this.session.chooseNode(id)) return;
+            this.inspectedPetId = null; this.reservesOpen = false; this.clearFeedback(); this.renderScreen();
+        }, zoom => { zoomLabel.string = `${Math.round(zoom * 100)}%`; });
+        this.button(root, complete ? '重新出发' : '定位当前', -214, top - 151, 200, 80,
+            () => complete ? this.restart() : map.focus(focus, complete), C.pale, C.ink);
+        this.button(root, '−', 94, top - 151, 80, 80, () => map.zoomBy(-0.15), C.pale, C.ink);
+        this.button(root, '+', 282, top - 151, 80, 80, () => map.zoomBy(0.15), C.pale, C.ink);
     }
 
     private drawBattle(root: Node, g: Graphics): void {
@@ -716,7 +705,7 @@ export class MvpGame extends Component {
             : '敌人突破防线，树心 1 → 0。\n换个位置，再试一次。', 0, 20, 26, 580, C.muted, false, false, 110);
         this.button(modal, won ? (this.session.current?.children.length ? '继续选择路线' : '抵达净土') : '重新选择路线',
             0, -134, 560, 84, () => {
-                if (won) { this.session.continueRoute(); this.reservesOpen = false; this.clearFeedback(); this.renderScreen(); }
+                if (won) { this.session.continueRoute(); this.mapCamera = null; this.reservesOpen = false; this.clearFeedback(); this.renderScreen(); }
                 else this.restart();
             });
     }
