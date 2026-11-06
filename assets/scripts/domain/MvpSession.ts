@@ -118,7 +118,7 @@ export class MvpSession {
         this.nextSpawn = 1; this.enemies = []; this.projectiles = []; this.marks = [];
         this.paused = false;
         // The MVP uses the same battlefield in every encounter: keep the squad and its slots.
-        for (const pet of this.pets) { pet.cooldown = 0; pet.lastAttack = -10; pet.readyTick = 0; }
+        for (const pet of this.pets) { pet.cooldown = 0; pet.lastAttack = -10; pet.readyTick = 0; pet.attackCount = 0; }
         return true;
     }
 

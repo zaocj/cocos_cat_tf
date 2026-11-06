@@ -598,7 +598,6 @@ export class MvpGame extends Component {
         const base = points[points.length - 1]; const entry = points[0];
         this.tree(g, base.x, base.y, 0.66);
         this.text(root, '摇篮树', base.x - 112, base.y - 12, 22, 140, C.green, false, true, 38);
-        this.text(root, '雾兽入口', entry.x + 104, entry.y, 22, 150, C.muted);
         SUMMON_ORDER.forEach((id, i) => this.petCard(root, id, -280 + i * 112, bottom + 216));
         this.ropeCard(root, 280, bottom + 216);
         this.deploymentLabel = this.text(root, '', 0, bottom + 312, 22, 640, C.ink, false, false, 32);
@@ -769,7 +768,7 @@ export class MvpGame extends Component {
         if (this.infoMergeButton) {
             this.infoMergeButton.active = !!pet && this.inspectedEnemyId === null;
             const mergeLabel = this.infoMergeButton.getComponentInChildren(Label);
-            const mergeText = this.mergeSourceId !== null ? '取消合成' : pet?.star === 3 ? '满星' : '合成';
+            const mergeText = this.mergeSourceId !== null ? '取消' : pet?.star === 3 ? '满星' : '合成';
             if (mergeLabel && mergeLabel.string !== mergeText) mergeLabel.string = mergeText;
         }
         const enemy = this.session.enemies.find(e => e.id === this.inspectedEnemyId);
@@ -793,7 +792,7 @@ export class MvpGame extends Component {
                 [this.infoTitle, release ? '归林绳索 · 放生' : '掘芽鼹 · 一次性开垦'],
                 [this.infoStats, release ? '返还原召唤消耗的 60% 灵露' : `${PETS.mole.cost} 灵露 · 解锁一个荒藤树桩`],
                 [this.infoEffect, release ? '拖到宠物身上，或选绳索再点宠物' : '清除荒藤后钻回森林，不占树桩'],
-                [this.infoMeta, release ? '普通宠物返还 18 灵露 · 后备也可放生' : '开垦在本次远征内保留 · 不进入后备'],
+                [this.infoMeta, release ? '1星伙伴返18 · 合成后按总投入返还' : '开垦在本次远征内保留 · 不进入后备'],
                 [this.infoAction, release ? '退出工具' : `${PETS.mole.cost} 灵露`],
             ];
             if (this.infoTitle) this.infoTitle.color = color(release ? C.orange : C.mole);
@@ -814,10 +813,8 @@ export class MvpGame extends Component {
         let effect = species === 'deer' ? '范围内友军获得增益，同类光环不叠加'
             : species === 'mushroom' ? '孢子只伤害范围内敌人，离开范围即停止'
                 : species === 'cat' ? '挥爪攻击最接近摇篮树的单个敌人' : '发射星弹，追踪范围内最靠前的敌人';
-        if (pet?.mutation === 'power') effect = pet.species === 'deer' ? '浓露异变 · 助威×1.6，范围×0.7' : '巨力异变 · 攻击×2，攻击间隔×1.5';
-        if (pet?.mutation === 'resonance') effect = pet.species === 'cat' ? '震荡爪 · 每第3击震伤周围敌人'
-            : pet.species === 'rabbit' ? '双星弹 · 每第3发追加70%伤害星弹'
-                : pet.species === 'mushroom' ? '蔓延孢雾 · 每第3次脉冲范围+35%' : '灵铃共鸣 · 友军攻速+20%';
+        const mutation = pet?.mutation ? mutationCards(pet.species).find(card => card.id === pet.mutation) : undefined;
+        if (mutation) effect = `${mutation.name} · ${mutation.summary}`;
         const meta = pet ? `${pet.slot === null ? '后备' : '已部署'} #${pet.id} · 搬迁 / 放生 +${Math.floor(pet.purchaseCost * ECONOMY.releaseRate)} 灵露`
             : `未部署 · ${spec.cost} 灵露 · ${this.session.dew < spec.cost ? '灵露不足' : '点击空位或拖动头像'}`;
         if (this.infoTitle) this.infoTitle.color = color(this.petTint(species));
