@@ -5,7 +5,7 @@ export const REFERENCE_SQUAD: readonly { species: PetId; slot: number }[] = [
     { species: 'mushroom', slot: 9 }, { species: 'rabbit', slot: 6 }, { species: 'cat', slot: 8 },
 ];
 
-/** Uses only real earned dew and public commands; no injected pets, upgrades or funds. */
+/** Combat regression fixture: preloaded catalog via Session options; upgrades use earned dew and public commands. Not the default two-species purchase loop. */
 export function developReferenceSquad(game: MvpSession, evolve = true): void {
     const summon = (species: PetId, slot: number): PetState => {
         const result = game.summonPet(species, slot);

@@ -992,7 +992,7 @@ export class MvpGame extends Component {
                 this.circle(g, x + 5, y + 5, 6, C.vine);
             }
             const left = Math.max(0, wall.expiresTick - s.tick) / wall.durationTicks;
-            this.rect(g, p.x - 24 + 24 * left, p.y + 38, Math.max(1, 48 * left), 5, C.green, 2);
+            this.rect(g, p.x - 24 + 24 * left, p.y - 38, Math.max(1, 48 * left), 5, C.green, 2);
         }
         const liveIds = new Set(s.enemies.map(e => e.id));
         for (const [id, label] of this.enemyLabels) if (!liveIds.has(id)) {
