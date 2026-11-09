@@ -12,7 +12,7 @@ export const PET_GROWTH = {
     extraBoltDamage: 0.7, sporeRange: 1.35, auraSpeed: 1.2,
     vineIntervalByStar: [7, 6, 5], vineLifetime: 2,
     vineLongLife: 2, vineLongInterval: 1.5, vineQuickInterval: 0.65, vineQuickLife: 0.75,
-    chainTargets: 3, chainExtraTargets: 2, chainRange: 115, chainDecay: 0.7,
+    chainTargets: 3, chainExtraTargets: 2, chainRange: 160, chainDecay: 0.7,
 } as const;
 
 export interface MutationCard { id: MutationId; name: string; detail: string; summary: string }

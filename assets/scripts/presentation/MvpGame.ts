@@ -1,6 +1,6 @@
 import {
     _decorator, BlockInputEvents, Color, Component, EventKeyboard, EventTouch, game, Game, Graphics, input, Input,
-    KeyCode, Label, Layers, Mask, Node, profiler, ResolutionPolicy, screen, UITransform, Vec3, view,
+    KeyCode, Label, Layers, Mask, Node, profiler, ResolutionPolicy, screen, sys, UITransform, Vec3, view,
 } from 'cc';
 import { ActionError, ECONOMY, MvpSession, PATH, PETS, PET_ORDER, PetActionResult, MergeResult, PocketResult, PetId, SLOTS, STEP, EnemyState, RestChoice, pointOnPath } from '../domain/MvpSession';
 import { isPortrait, PortraitLayout, portraitLayout, portraitSlotAt, PORTRAIT_MIN_HEIGHT, PORTRAIT_WIDTH, toPortraitBoard } from './PortraitLayout';
@@ -11,6 +11,8 @@ import { PET_GROWTH, MutationId, mutationCards } from '../domain/PetGrowth';
 import { ROUTE_BOUNDS } from '../domain/ExpeditionRoute';
 import { RouteMapViewport } from './RouteMapViewport';
 import { RouteMapView } from './RouteMapView';
+import { ArchiveLoad, RunArchive } from '../infrastructure/RunArchive';
+import { GuideId, GUIDE_IDS, GUIDES, nextGuide, PlayerProfile } from '../domain/FirstGuide';
 
 const { ccclass } = _decorator;
 type Selection = { kind: 'carried'; species: PetId } | { kind: 'pet'; id: number } | { kind: 'release' } | { kind: 'cultivate' };
@@ -47,6 +49,16 @@ function freshSession(): MvpSession {
 @ccclass('MvpGame')
 export class MvpGame extends Component {
     private session = freshSession();
+    private archive: RunArchive | null = null;
+    private saved: ArchiveLoad = { status: 'empty', data: null, message: '' };
+    private profile: PlayerProfile = { guideSeen: [] };
+    private atHome = true;
+    private menuOpen = false;
+    private confirmNew = false;
+    private sessionOnly = false;
+    private saveProblem = '';
+    private lastSavedTick = 0;
+    private guideActive: GuideId | null = null;
     private mapCamera: RouteMapViewport | null = null;
     private screenRoot: Node | null = null;
     private dynamic: Graphics | null = null;
@@ -77,7 +89,7 @@ export class MvpGame extends Component {
     private feedback = '';
     private feedbackError: ActionError | null = null;
     private accumulator = 0;
-    private speed = 1;
+    private speed: 1 | 2 = 1;
     private lastCounter = '';
     private layout: PortraitLayout = portraitLayout(PORTRAIT_MIN_HEIGHT);
     private orientationBlocked = false;
@@ -91,6 +103,7 @@ export class MvpGame extends Component {
         input.on(Input.EventType.KEY_DOWN, this.onKey, this);
         game.on(Game.EVENT_HIDE, this.onHide, this);
         screen.on('window-resize', this.onViewportResize, this);
+        if (typeof window !== 'undefined') window.addEventListener('pagehide', this.pageHide);
         if (this.screenRoot) this.onViewportResize();
     }
     onDisable(): void {
@@ -102,28 +115,37 @@ export class MvpGame extends Component {
         input.off(Input.EventType.KEY_DOWN, this.onKey, this);
         game.off(Game.EVENT_HIDE, this.onHide, this);
         screen.off('window-resize', this.onViewportResize, this);
+        if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.pageHide);
         if (this.orientationGate) this.orientationGate.style.display = 'none';
     }
     onDestroy(): void { this.toast?.node?.destroy(); this.toast = null; this.orientationGate?.remove(); }
     start(): void {
         profiler.hideStats();
+        this.archive = new RunArchive(sys.localStorage);
+        this.saved = this.archive.load();
+        this.profile = this.saved.data?.profile ?? { guideSeen: [] };
+        this.speed = this.profile.speed ?? 1;
         this.onViewportResize();
     }
     update(dt: number): void {
-        const heartBefore = this.session.heart;
+        const heartBefore = this.session.heart; const killsBefore = this.session.kills;
         const drag = this.summonDrag;
         if (drag) {
             drag.elapsed = Math.max(drag.elapsed + Math.min(dt, 0.1), (this.gestureTime() - drag.startedAt) / 1000);
             if (!this.canDrag(drag)) drag.active = false;
             else if (drag.elapsed >= 0.3) drag.active = true;
         }
-        if (!this.orientationBlocked && this.session.phase === 'battle' && !this.session.paused) {
+        if (!this.atHome && !this.menuOpen && !this.guideActive && !this.saveProblem
+            && !this.orientationBlocked && this.session.phase === 'battle' && !this.session.paused) {
             this.accumulator += Math.min(dt, 0.1) * this.speed;
             let steps = 0;
             while (this.accumulator >= STEP && steps++ < 12) {
                 this.session.step(); this.accumulator -= STEP;
                 if (this.session.phase !== 'battle') { this.accumulator = 0; this.renderScreen(); break; }
             }
+        }
+        if (!this.atHome && !this.saveProblem && (this.session.tick - this.lastSavedTick >= 30 || this.session.heart !== heartBefore || this.session.kills !== killsBefore)) {
+            if (!this.checkpoint()) this.renderScreen();
         }
         if (this.session.heart > 0 && this.session.heart < heartBefore)
             this.toast?.show(`雾兽突破，树心 -${heartBefore - this.session.heart}（${this.session.heart}/${this.session.maxHeart}）`, { tone: 'warning' });
@@ -143,10 +165,11 @@ export class MvpGame extends Component {
         this.inspectedPetId = null;
         this.summonDrag = null;
         this.resumeAfterPortrait = false;
-        if (this.session.setPaused(true)) { this.accumulator = 0; this.renderScreen(); }
+        if (!this.atHome) { this.session.setPaused(true); this.accumulator = 0; this.checkpoint(); this.renderScreen(); }
     }
+    private pageHide = (): void => { this.onHide(); };
     private onKey(event: EventKeyboard): void {
-        if (this.orientationBlocked || this.reservesOpen || this.summonDrag) return;
+        if (this.atHome || this.menuOpen || this.guideActive || this.saveProblem || this.orientationBlocked || this.reservesOpen || this.summonDrag) return;
         if (event.keyCode === KeyCode.DIGIT_1) this.selectPet('cat');
         if (event.keyCode === KeyCode.DIGIT_2) this.selectPet('rabbit');
         if (event.keyCode === KeyCode.DIGIT_3) this.selectPet('deer');
@@ -197,13 +220,122 @@ export class MvpGame extends Component {
         this.session.setPaused(!this.session.paused); this.accumulator = 0; this.clearFeedback(); this.renderScreen();
     }
     private restart(): void {
+        this.atHome = false; this.menuOpen = false; this.confirmNew = false; this.guideActive = null;
         this.banishCandidate = null;
         this.infoOpen = false;
         this.mergeSourceId = null;
         this.inspectedEnemyId = null; this.announcedEnemies.clear();
         this.inspectedPetId = null;
         this.session = freshSession(); this.mapCamera = null; this.selected = { kind: 'carried', species: 'cat' }; this.clearFeedback();
-        this.accumulator = 0; this.speed = 1; this.reservesOpen = false; this.renderScreen();
+        this.accumulator = 0; this.speed = this.profile.speed ?? 1; this.reservesOpen = false; this.renderScreen();
+    }
+
+    private checkpoint(): boolean {
+        if (this.atHome || this.sessionOnly || !this.archive) return true;
+        const result = this.archive.save(this.session, this.profile);
+        if (result.ok === false) {
+            this.saveProblem = result.message; this.session.setPaused(true); this.accumulator = 0; return false;
+        }
+        this.lastSavedTick = this.session.tick; return true;
+    }
+
+    private continueSaved(): void {
+        const snapshot = this.saved.data?.run; if (!snapshot) return;
+        this.session = MvpSession.restore(snapshot);
+        // Cold restoration never advances combat until the player explicitly resumes.
+        this.session.setPaused(true);
+        this.atHome = false; this.menuOpen = false; this.confirmNew = false; this.saveProblem = '';
+        this.accumulator = 0; this.mapCamera = null; this.reservesOpen = false;
+        this.selected = { kind: 'carried', species: this.session.carriedPets[0] };
+        this.inspectedPetId = null; this.inspectedEnemyId = null; this.clearFeedback(); this.renderScreen();
+    }
+
+    private openMenu(): void {
+        this.session.setPaused(true); this.menuOpen = true; this.infoOpen = false;
+        this.accumulator = 0; this.renderScreen();
+    }
+
+    private home(): void {
+        if (!this.checkpoint()) { this.renderScreen(); return; }
+        this.saved = this.sessionOnly ? { status: 'ready', data: { run: this.session.snapshot(), profile: this.profile }, message: '本次试玩仅保留在内存中，关闭页面后不能恢复。' }
+            : this.archive?.load() ?? this.saved;
+        this.atHome = true; this.menuOpen = false; this.reservesOpen = false; this.mapCamera = null;
+        this.accumulator = 0; this.renderScreen();
+    }
+
+    private panel(root: Node, name: string, height: number): Node {
+        const modal = this.uiNode(name, root); modal.addComponent(BlockInputEvents);
+        const art = modal.addComponent(Graphics); art.fillColor = color(C.ink, 170);
+        art.rect(-360, this.layout.bottom, 720, this.layout.height); art.fill();
+        this.rect(art, 0, 0, 656, height, C.white, 22); return modal;
+    }
+
+    private drawHome(root: Node): void {
+        const g = this.graphics(root, 'HomeTree'); this.tree(g, 0, 240, 1.5);
+        this.text(root, '萌宠变异录', 0, 410, 46, 640, C.green, false, true, 90);
+        const run = this.saved.data?.run;
+        const resumable = !!run && run.phase !== 'lost' && run.phase !== 'complete';
+        const phaseNames: Record<string, string> = { map: '选路中', rest: '营地', sanctuary: '伙伴驿站', prepare: '准备防守', battle: '战斗中', mutation: '变异待选择', won: '节点已完成' };
+        this.text(root, resumable && run ? `第 ${run.visited.length + 1} 站 · ${phaseNames[run.phase] ?? run.phase}\n树心 ${run.heart}/3 · 灵露 ${run.dew} · 口袋 ${run.pocket.length}/6`
+            : '从猫与兔开始，守护摇篮树的远征。', 0, 90, 26, 620, C.ink, false, false, 100);
+        this.button(root, '继续远征', 0, -40, 580, 92, () => this.continueSaved(), C.green, C.white, resumable);
+        this.button(root, '新远征', 0, -165, 580, 92, () => {
+            if (resumable || ['corrupt', 'incompatible', 'unavailable'].includes(this.saved.status)) { this.confirmNew = true; this.renderScreen(); }
+            else this.restart();
+        }, C.pale, C.ink);
+        this.text(root, this.saved.message || (run?.phase === 'complete' ? '上一次远征已完成，开始新的旅途吧。' : '自动保存本局进度；新远征会重置口袋与灵露。'),
+            0, -300, 23, 610, this.saved.message ? C.orange : C.muted, false, false, 140);
+        if (this.confirmNew) {
+            const modal = this.panel(root, 'ConfirmNewRun', 420);
+            this.text(modal, '开始新远征？', 0, 122, 34, 600, C.ink, false, true, 70);
+            this.text(modal, '当前远征将被新局替换。\n首次引导的已读进度保留。', 0, 20, 25, 580, C.muted, false, false, 110);
+            this.button(modal, '取消', -154, -127, 276, 84, () => { this.confirmNew = false; this.renderScreen(); }, C.pale, C.ink);
+            this.button(modal, '开始新远征', 154, -127, 276, 84, () => this.restart(), C.orange, C.white, true, 24);
+        }
+    }
+
+    private drawRunMenu(root: Node): void {
+        const modal = this.panel(root, 'RunMenu', 640);
+        this.text(modal, '远征菜单', 0, 242, 36, 600, C.ink, false, true);
+        this.text(modal, this.sessionOnly ? '本次不保存 · 关闭后进度会丢失' : '进度自动保存，战斗已暂停', 0, 172, 23, 600, this.sessionOnly ? C.orange : C.muted);
+        this.button(modal, '继续远征', 0, 62, 560, 88, () => {
+            this.menuOpen = false; this.session.setPaused(false); this.accumulator = 0; this.renderScreen();
+        });
+        this.button(modal, this.sessionOnly ? '返回首页（仅本次保留）' : '保存并返回首页', 0, -60, 560, 88, () => this.home(), C.pale, C.ink, true, 24);
+        this.button(modal, '重新显示首次引导', 0, -182, 560, 88, () => {
+            this.profile = { ...this.profile, guideSeen: [] }; this.menuOpen = false; this.renderScreen();
+        }, C.pale, C.ink, true, 24);
+    }
+
+    private drawGuide(root: Node, id: GuideId): void {
+        const modal = this.panel(root, 'FirstGuide', 550);
+        this.text(modal, `首次指引 · ${GUIDE_IDS.indexOf(id) + 1}/${GUIDE_IDS.length}`, 0, 208, 22, 600, C.green);
+        this.text(modal, GUIDES[id].title, 0, 140, 33, 592, C.ink, false, true, 80);
+        this.text(modal, GUIDES[id].text, 0, 5, 25, 584, C.muted, false, false, 180);
+        this.button(modal, '知道了，试一试', 0, -139, 560, 80, () => {
+            this.profile.guideSeen = [...this.profile.guideSeen, id]; this.renderScreen();
+        }, C.green, C.white, true, 25);
+        this.button(modal, '跳过全部引导', 0, -227, 400, 56, () => {
+            this.profile.guideSeen = [...GUIDE_IDS]; this.renderScreen();
+        }, C.white, C.muted, true, 22);
+        // Visual anchors stay visible through the shade. Commands remain blocked until acknowledgement.
+        const art = modal.getComponent(Graphics);
+        if (art && (id === 'summon' || id === 'cultivate' || id === 'release')) {
+            const x = id === 'summon' ? -206 : id === 'cultivate' ? 200 : 280;
+            const y = this.layout.bottom + (id === 'summon' ? 52 : 164);
+            art.strokeColor = color(C.orange); art.lineWidth = 5;
+            art.roundRect(x - (id === 'summon' ? 122 : 42), y - 57, id === 'summon' ? 244 : 84, 114, 18); art.stroke();
+        }
+    }
+
+    private drawSaveFailure(root: Node): void {
+        const modal = this.panel(root, 'SaveFailure', 570);
+        this.text(modal, '存档未写入，已暂停', 0, 206, 32, 600, C.red, false, true, 80);
+        this.text(modal, this.saveProblem, 0, 74, 25, 580, C.ink, false, false, 140);
+        this.button(modal, '重试保存', 0, -72, 560, 88, () => { this.saveProblem = ''; this.checkpoint(); this.renderScreen(); });
+        this.button(modal, '本次不保存，继续试玩', 0, -197, 560, 88, () => {
+            this.sessionOnly = true; this.saveProblem = ''; this.renderScreen();
+        }, C.pale, C.ink, true, 24);
     }
 
     private clearFeedback(): void { this.feedback = ''; this.feedbackError = null; }
@@ -457,9 +589,10 @@ export class MvpGame extends Component {
         const node = this.uiNode(value.slice(0, 20), parent, x, y, width, height);
         const label = node.addComponent(Label); label.string = value; label.fontSize = size;
         label.lineHeight = size * 1.45; label.color = color(tint); label.isBold = bold;
-        label.fontFamily = 'sans-serif'; label.enableWrapText = true;
+        label.fontFamily = 'sans-serif'; label.enableWrapText = true; label.overflow = Label.Overflow.SHRINK;
         label.horizontalAlign = left ? Label.HorizontalAlign.LEFT : Label.HorizontalAlign.CENTER;
         label.verticalAlign = Label.VerticalAlign.CENTER;
+        node.getComponent(UITransform)?.setContentSize(width, height);
         return label;
     }
     private graphics(parent: Node, name = 'Graphics'): Graphics { return this.uiNode(name, parent).addComponent(Graphics); }
@@ -538,6 +671,8 @@ export class MvpGame extends Component {
     }
 
     private renderScreen(): void {
+        this.guideActive = null;
+        if (!this.atHome && !this.saveProblem) this.checkpoint();
         this.shovelMask = null; this.randomMask = null; this.starLabels.clear(); this.infoMergeButton = null; this.enemyLabels.clear(); this.bossStatus = null;
         if (this.reservesOpen || this.orientationBlocked
             || (this.session.phase !== 'prepare' && this.session.phase !== 'battle')) this.toast?.dismiss();
@@ -555,11 +690,20 @@ export class MvpGame extends Component {
             this.text(root, '本游戏仅支持竖屏\n调整设备或窗口方向后继续', 0, -70, 28, 640, C.muted, false, false, 110);
             return;
         }
-        this.heartLabel = this.text(root, `树心 ${this.session.heart}/${this.session.maxHeart}`, 240, this.layout.top - 46, 24, 170, this.session.heart <= 1 ? C.red : C.green);
+        if (this.atHome) { this.drawHome(root); return; }
+        this.heartLabel = this.text(root, `树心 ${this.session.heart}/${this.session.maxHeart}`, 185, this.layout.top - 46, 24, 170, this.session.heart <= 1 ? C.red : C.green);
+        this.button(root, '≡', 304, this.layout.top - 46, 48, 46, () => this.openMenu(), C.pale, C.ink, true, 26);
         if (this.session.phase === 'map' || this.session.phase === 'complete') this.drawMap(root, g);
         else if (this.session.phase === 'rest') this.drawRest(root, g);
         else if (this.session.phase === 'sanctuary') this.drawSanctuary(root, g);
         else this.drawBattle(root, g);
+        if (this.menuOpen) this.drawRunMenu(root);
+        else if (!this.saveProblem) {
+            const tool = this.selected.kind === 'cultivate' || this.selected.kind === 'release' ? this.selected.kind : null;
+            this.guideActive = nextGuide(this.session, this.profile.guideSeen, tool);
+            if (this.guideActive) this.drawGuide(root, this.guideActive);
+        }
+        if (this.saveProblem) this.drawSaveFailure(root);
     }
 
     private drawMap(root: Node, g: Graphics): void {
@@ -719,7 +863,7 @@ export class MvpGame extends Component {
         this.button(root, session.phase === 'prepare' ? '开始防守' : session.paused ? '继续' : '暂停',
             0, bottom + 52, 160, 84, () => session.phase === 'prepare' ? this.begin() : this.togglePause(), C.pale, C.ink, true, 24);
         this.button(root, `${this.speed}倍速`, 147, bottom + 52, 114, 84,
-            () => { this.speed = this.speed === 1 ? 2 : 1; this.renderScreen(); }, C.pale, C.ink, true, 22);
+            () => { this.speed = this.speed === 1 ? 2 : 1; this.profile.speed = this.speed; this.renderScreen(); }, C.pale, C.ink, true, 22);
         const count = session.pets.filter(p => p.slot === null).length;
         this.button(root, `后备 ${count}`, 271, bottom + 52, 114, 84,
             () => { this.reservesOpen = true; this.renderScreen(); }, C.pale, C.ink, count > 0, 22);

@@ -11,7 +11,7 @@ export interface Point { x: number; y: number }
 export const STEP = 1 / 30;
 export const ECONOMY = {
     startingDew: 60, summonCost: 30, restDew: 45, restHeal: 1, maxHeart: 3,
-    cultivateCost: 40, carryLimit: 6, petUnlockCost: 30, banishCost: 20, releaseRate: 0.6, relocationTicks: 30,
+    cultivateCost: 40, carryLimit: 6, petUnlockCost: 20, banishCost: 20, releaseRate: 0.6, relocationTicks: 30,
 } as const;
 export const PET_ORDER: readonly PetId[] = ['cat', 'rabbit', 'deer', 'mushroom', 'vine', 'sparrow'];
 export const STARTING_PETS: readonly PetId[] = ['cat', 'rabbit'];
@@ -21,7 +21,7 @@ export const PETS = {
     deer: { name: '铃芽鹿', role: '增益', cost: ECONOMY.summonCost, range: 185, damage: 0, interval: 0, boost: 0.4 },
     mushroom: { name: '茸茸菇', role: '持续伤害', cost: ECONOMY.summonCost, range: 145, damage: 8, interval: 0.5, boost: 0 },
     vine: { name: '藤蔓墙兽', role: '阻挡', cost: ECONOMY.summonCost, range: 165, damage: 0, interval: 7, boost: 0 },
-    sparrow: { name: '电绒雀', role: '连锁闪电', cost: ECONOMY.summonCost, range: 190, damage: 18, interval: 1.4, boost: 0 },
+    sparrow: { name: '电绒雀', role: '连锁闪电', cost: ECONOMY.summonCost, range: 190, damage: 24, interval: 1.2, boost: 0 },
 } as const;
 /** Portrait battlefield: upper-left entrance, three cross-field turns, lower-right tree. */
 export const PATH: readonly Point[] = [
@@ -55,6 +55,13 @@ export interface ProjectileState extends Point { id: number; targetId: number; d
 export interface AttackMark { from: Point; to: Point; expires: number; kind: PetId; radius?: number }
 export interface VineWall { id: number; ownerId: number; distance: number; expiresTick: number; durationTicks: number }
 export type PocketResult = { ok: true; species: PetId; cost: number } | { ok: false; reason: ActionError };
+export interface RunSnapshot {
+    seed: number; mutationChance: number; mutationState: number; summonState: number;
+    pocket: readonly PetId[]; banished: readonly PetId[]; phase: Phase; pendingMutation: PendingMutation | null;
+    heart: number; dew: number; paused: boolean; tick: number; kills: number; leaked: number; spawned: number;
+    visited: string[]; currentId: string | null; unlockedSlots: number[]; pets: PetState[]; enemies: EnemyState[];
+    projectiles: ProjectileState[]; marks: AttackMark[]; vineWalls: VineWall[]; nextId: number; nextSpawn: number;
+}
 
 export function distance(a: Point, b: Point): number { return Math.hypot(a.x - b.x, a.y - b.y); }
 export const PATH_LENGTH = PATH.slice(1).reduce((sum, p, i) => sum + distance(PATH[i], p), 0);
@@ -117,6 +124,32 @@ export class MvpSession {
     vineWalls: VineWall[] = [];
     private nextId = 1;
     private nextSpawn = 0;
+
+    snapshot(): RunSnapshot {
+        // Return detached, JSON-safe data. UI/serialization must never hold live simulation references.
+        return JSON.parse(JSON.stringify({ seed: this.seed, mutationChance: this.mutationChance,
+            mutationState: this.mutationState, summonState: this.summonState, pocket: this.pocket, banished: this.banished,
+            phase: this.phase, pendingMutation: this.pendingMutation, heart: this.heart, dew: this.dew, paused: this.paused,
+            tick: this.tick, kills: this.kills, leaked: this.leaked, spawned: this.spawned, visited: this.visited,
+            currentId: this.current?.id ?? null, unlockedSlots: this.unlockedSlots, pets: this.pets, enemies: this.enemies,
+            projectiles: this.projectiles, marks: this.marks, vineWalls: this.vineWalls, nextId: this.nextId, nextSpawn: this.nextSpawn }));
+    }
+
+    static restore(value: unknown): MvpSession {
+        if (!validSnapshot(value)) throw new Error('远征存档的数据或状态关系无效');
+        const data: RunSnapshot = JSON.parse(JSON.stringify(value));
+        const game = new MvpSession(data.seed, { mutationChance: data.mutationChance, carriedPets: data.pocket });
+        game.banished = Object.freeze([...data.banished]);
+        game.mutationState = data.mutationState; game.summonState = data.summonState;
+        game.phase = data.phase; game.pendingMutation = data.pendingMutation; game.heart = data.heart; game.dew = data.dew;
+        game.paused = data.paused; game.tick = data.tick; game.kills = data.kills; game.leaked = data.leaked;
+        game.spawned = data.spawned; game.visited = data.visited;
+        game.current = game.route.find(node => node.id === data.currentId) ?? null;
+        game.unlockedSlots.splice(0, game.unlockedSlots.length, ...data.unlockedSlots);
+        game.pets = data.pets; game.enemies = data.enemies; game.projectiles = data.projectiles;
+        game.marks = data.marks; game.vineWalls = data.vineWalls; game.nextId = data.nextId; game.nextSpawn = data.nextSpawn;
+        return game;
+    }
 
     get available(): readonly RouteNode[] {
         if (this.phase !== 'map') return [];
@@ -466,6 +499,8 @@ export class MvpSession {
             let target: EnemyState | undefined;
             for (const enemy of this.enemies) {
                 if (enemy.hp <= 0 || distance(origin, enemy) > range) continue;
+                // Multiple wall beasts should relay their casts, not waste every cooldown on one stopped enemy.
+                if (pet.species === 'vine' && this.vineWalls.some(wall => Math.abs(enemy.distance - wall.distance) < 1e-8)) continue;
                 if (!target || enemy.distance > target.distance ||
                     (enemy.distance === target.distance && enemy.id < target.id)) target = enemy;
             }
@@ -533,4 +568,85 @@ export class MvpSession {
         this.marks = this.marks.filter(m => m.expires > time);
         if (this.phase === 'battle' && this.spawned === encounter.count && this.enemies.length === 0) this.phase = 'won';
     }
+}
+
+function object(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }
+function number(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value); }
+function uint(value: unknown): value is number { return number(value) && Number.isSafeInteger(value) && value >= 0; }
+function point(value: unknown): value is Point {
+    return object(value) && number(value.x) && number(value.y) && Math.abs(value.x) < 100000 && Math.abs(value.y) < 100000;
+}
+function species(value: unknown): value is PetId { return typeof value === 'string' && PET_ORDER.some(id => id === value); }
+function mutation(value: unknown): value is MutationId | null { return value === null || value === 'power' || value === 'resonance'; }
+function array<T>(value: unknown, check: (item: unknown) => item is T, limit = 200): value is T[] {
+    return Array.isArray(value) && value.length <= limit && value.every(check);
+}
+function unique(values: readonly unknown[]): boolean { return new Set(values).size === values.length; }
+function petData(value: unknown): value is PetState {
+    return object(value) && uint(value.id) && value.id > 0 && species(value.species)
+        && (value.slot === null || uint(value.slot) && value.slot < SLOTS.length)
+        && (value.star === 1 || value.star === 2 || value.star === 3) && mutation(value.mutation)
+        && uint(value.attackCount) && value.purchaseCost === ECONOMY.summonCost * 2 ** (value.star - 1)
+        && number(value.cooldown) && value.cooldown >= 0 && number(value.lastAttack) && uint(value.readyTick);
+}
+function enemyData(value: unknown): value is EnemyState {
+    if (!object(value) || !point(value) || !uint(value.id) || value.id === 0 || typeof value.kind !== 'string'
+        || !Object.keys(ENEMIES).includes(value.kind) || !number(value.hp) || !number(value.maxHp)
+        || value.hp <= 0 || value.hp > value.maxHp || !uint(value.lastDamageTick)
+        || !number(value.distance) || value.distance < 0 || value.distance >= PATH_LENGTH) return false;
+    const expected = pointOnPath(value.distance);
+    return Math.abs(expected.x - value.x) < 1e-6 && Math.abs(expected.y - value.y) < 1e-6;
+}
+function projectileData(value: unknown): value is ProjectileState {
+    return object(value) && point(value) && uint(value.id) && value.id > 0 && uint(value.targetId)
+        && value.targetId > 0 && number(value.damage) && value.damage >= 0;
+}
+function markData(value: unknown): value is AttackMark {
+    return object(value) && point(value.from) && point(value.to) && number(value.expires) && value.expires >= 0
+        && species(value.kind) && (value.radius === undefined || number(value.radius) && value.radius > 0);
+}
+function wallData(value: unknown): value is VineWall {
+    return object(value) && uint(value.id) && value.id > 0 && uint(value.ownerId) && value.ownerId > 0
+        && number(value.distance) && value.distance >= 0 && value.distance < PATH_LENGTH
+        && uint(value.expiresTick) && uint(value.durationTicks) && value.durationTicks > 0;
+}
+function validSnapshot(v: unknown): v is RunSnapshot {
+    if (!object(v) || !uint(v.seed) || v.seed > 0xffffffff || !number(v.mutationChance) || v.mutationChance < 0 || v.mutationChance > 1
+        || !uint(v.mutationState) || v.mutationState > 0xffffffff || !uint(v.summonState) || v.summonState > 0xffffffff
+        || !array(v.pocket, species, ECONOMY.carryLimit) || !v.pocket.length || !unique(v.pocket)
+        || !v.pocket.some(id => PETS[id].damage > 0) || !array(v.banished, species, PET_ORDER.length) || !unique(v.banished)
+        || typeof v.phase !== 'string' || !['map', 'rest', 'sanctuary', 'prepare', 'battle', 'mutation', 'won', 'lost', 'complete'].includes(v.phase)
+        || !uint(v.heart) || v.heart > ECONOMY.maxHeart || !uint(v.dew) || typeof v.paused !== 'boolean'
+        || !uint(v.tick) || !uint(v.kills) || !uint(v.leaked) || !uint(v.spawned)
+        || !array(v.visited, (item): item is string => typeof item === 'string', ROUTE_DEPTHS) || !unique(v.visited)
+        || !(v.currentId === null || typeof v.currentId === 'string')
+        || !array(v.unlockedSlots, uint, SLOTS.length) || !unique(v.unlockedSlots) || v.unlockedSlots.some(i => i >= SLOTS.length)
+        || !array(v.pets, petData, SLOTS.length) || !array(v.enemies, enemyData, 30)
+        || !array(v.projectiles, projectileData, 200) || !array(v.marks, markData, 300) || !array(v.vineWalls, wallData, 40)
+        || !uint(v.nextId) || v.nextId === 0 || !number(v.nextSpawn) || v.nextSpawn < 0) return false;
+    const { pocket, banished, unlockedSlots, nextId } = v;
+    if (banished.some(id => pocket.includes(id)) || SLOTS.some((_, i) => !LOCKED_SLOTS.includes(i) && !unlockedSlots.includes(i))) return false;
+    const slots = v.pets.map(pet => pet.slot).filter((slot): slot is number => slot !== null);
+    const ids = [...v.pets, ...v.enemies, ...v.projectiles, ...v.vineWalls].map(entity => entity.id);
+    if (!unique(slots) || slots.some(slot => !unlockedSlots.includes(slot)) || !unique(ids) || ids.some(id => id >= nextId)) return false;
+    const route = generateRoute(v.seed); let last: RouteNode | undefined;
+    for (const id of v.visited) {
+        const node = route.find(n => n.id === id);
+        if (!node || node.depth !== (last ? last.depth + 1 : 0) || last && !last.children.includes(id)) return false;
+        last = node;
+    }
+    const current = route.find(n => n.id === v.currentId);
+    if (v.phase === 'map' || v.phase === 'complete') {
+        if (v.currentId !== (last?.id ?? null) || (v.phase === 'complete') !== (v.visited.length === ROUTE_DEPTHS)) return false;
+    } else if (!current || current.depth !== v.visited.length || last && !last.children.includes(current.id)) return false;
+    if ((v.phase === 'lost') !== (v.heart === 0) || v.kills + v.leaked > v.spawned || v.spawned > (current?.count ?? 0)) return false;
+    if (v.phase === 'rest' && current?.kind !== 'rest' || v.phase === 'sanctuary' && current?.kind !== 'sanctuary') return false;
+    if (['prepare', 'battle', 'mutation', 'lost'].includes(v.phase) && current?.kind !== 'battle') return false;
+    if (v.phase === 'mutation') {
+        const pending = v.pendingMutation;
+        if (!object(pending) || !uint(pending.petId) || !v.pets.some(p => p.id === pending.petId && p.star > 1)
+            || !Array.isArray(pending.choices) || JSON.stringify(pending.choices) !== '["power","resonance"]'
+            || !['prepare', 'battle'].includes(String(pending.resumePhase)) || typeof pending.pauseAfterChoice !== 'boolean' || !v.paused) return false;
+    } else if (v.pendingMutation !== null) return false;
+    return true;
 }

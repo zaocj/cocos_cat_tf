@@ -31,7 +31,7 @@ test('new runs carry only cat and rabbit; buying extends the pool, not the deplo
     expect(game.carriedPets).toEqual(['cat', 'rabbit']); const rng = [game.summonRngState, game.mutationRngState];
     for (const species of ['deer', 'mushroom', 'vine', 'sparrow'] as const)
         expect(game.buyPocketPet(species)).toEqual({ ok: true, species, cost: ECONOMY.petUnlockCost });
-    expect(game.carriedPets).toEqual(PET_ORDER); expect(game.dew).toBe(80); expect(game.pets).toHaveLength(0);
+    expect(game.carriedPets).toEqual(PET_ORDER); expect(game.dew).toBe(120); expect(game.pets).toHaveLength(0);
     expect([game.summonRngState, game.mutationRngState]).toEqual(rng); expect(Object.isFrozen(game.carriedPets)).toBe(true);
 });
 
@@ -39,8 +39,8 @@ test('buying twice, invalid species, insufficient money, wrong phase and pause n
     const game = sanctuary(); const pool = game.carriedPets; const dew = game.dew;
     expect(game.buyPocketPet('cat')).toEqual({ ok: false, reason: 'ALREADY_CARRIED' });
     expect(game.buyPocketPet('shovel' as PetId)).toEqual({ ok: false, reason: 'INVALID_SPECIES' });
-    game.dew = 29; expect(game.buyPocketPet('vine')).toEqual({ ok: false, reason: 'INSUFFICIENT_DEW' });
-    expect(game.dew).toBe(29); expect(game.carriedPets).toBe(pool);
+    game.dew = 19; expect(game.buyPocketPet('vine')).toEqual({ ok: false, reason: 'INSUFFICIENT_DEW' });
+    expect(game.dew).toBe(19); expect(game.carriedPets).toBe(pool);
     game.dew = dew; game.paused = true;
     expect(game.buyPocketPet('vine')).toEqual({ ok: false, reason: 'PAUSED' });
     game.paused = false; game.phase = 'battle';

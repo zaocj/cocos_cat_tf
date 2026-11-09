@@ -42,6 +42,16 @@ test('a vine wall stops a BOSS too, and cannot damage or create kill rewards', (
     expect(game.dew).toBe(dew); expect(game.kills).toBe(0);
 });
 
+test('two wall beasts relay their control instead of spending both cooldowns on the same stopped target', () => {
+    const { game, pet } = prepare('vine'); const second = game.summonPet('vine', 4);
+    if (!second.ok) throw new Error('Missing second wall beast');
+    const foe = enemy(100, 210); battle(game, [foe]); game.step(); const progress = foe.distance;
+    expect(game.vineWalls).toHaveLength(1); expect(pet.attackCount).toBe(1); expect(second.pet.attackCount).toBe(0);
+    ticks(game, 60); expect(foe.distance).toBe(progress); expect(second.pet.attackCount).toBe(0);
+    game.step(); expect(game.vineWalls).toHaveLength(1); expect(game.vineWalls[0].ownerId).toBe(second.pet.id);
+    const next = foe.distance; ticks(game, 60); expect(foe.distance).toBe(next);
+});
+
 test('vines require a target, respect cooldown and relocation, and freeze with combat pause', () => {
     const { game, pet } = prepare('vine'); const foe = enemy(100, 1000);
     battle(game, [foe], 0); game.step(); expect(game.vineWalls).toHaveLength(0); expect(pet.attackCount).toBe(0);
@@ -76,7 +86,7 @@ test('existing vines retain their cast lifetime when the owner is released, and 
 test('sparrow lightning hits at most three distinct enemies with 70 percent decay and no projectile', () => {
     const { game } = prepare('sparrow'); const foes = [enemy(100, 200), enemy(101, 240), enemy(102, 280), enemy(103, 1000)];
     battle(game, foes, 0); game.step();
-    expect(foes[2].hp).toBeCloseTo(982); expect(foes[1].hp).toBeCloseTo(987.4); expect(foes[0].hp).toBeCloseTo(991.18);
+    expect(foes[2].hp).toBeCloseTo(976); expect(foes[1].hp).toBeCloseTo(983.2); expect(foes[0].hp).toBeCloseTo(988.24);
     expect(foes[3].hp).toBe(1000); expect(game.projectiles).toHaveLength(0); expect(game.marks).toHaveLength(3);
     expect(game.marks.every(mark => mark.kind === 'sparrow')).toBe(true);
 });
@@ -84,7 +94,7 @@ test('sparrow lightning hits at most three distinct enemies with 70 percent deca
 test('sparrow resonance expands only every third real chain to five targets', () => {
     const { game, pet } = prepare('sparrow', 'resonance');
     const foes = [200, 225, 250, 275, 300].map((travel, i) => enemy(100 + i, travel));
-    battle(game, foes, 0); ticks(game, 84);
+    battle(game, foes, 0); ticks(game, 72);
     expect(pet.attackCount).toBe(2); expect(foes[0].hp).toBe(1000); expect(foes[1].hp).toBe(1000);
     game.step(); expect(pet.attackCount).toBe(3); expect(game.marks).toHaveLength(5);
     expect(foes.every(foe => foe.hp < 1000)).toBe(true);
@@ -94,6 +104,6 @@ test('sparrow damage uses armor and deer amplification, while death rewards stil
     const { game } = prepare('sparrow'); game.summonPet('deer', 5);
     const target = enemy(100, 210); target.kind = 'armored'; target.hp = 10;
     battle(game, [target], 0); const dew = game.dew; game.step();
-    expect(game.kills).toBe(1); expect(game.dew).toBe(dew + 8); expect(target.hp).toBeCloseTo(10 - 18 * 1.4 * 0.65);
+    expect(game.kills).toBe(1); expect(game.dew).toBe(dew + 8); expect(target.hp).toBeCloseTo(10 - 24 * 1.4 * 0.65);
     game.step(); expect(game.dew).toBe(dew + 8); expect(game.kills).toBe(1);
 });

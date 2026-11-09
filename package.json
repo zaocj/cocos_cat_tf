@@ -12,6 +12,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "balance": "vitest run tests/random-campaign.test.ts",
     "build:mvp": "node tools/build-mvp.mjs",
     "serve": "python3 -m http.server 8090 --bind 127.0.0.1 --directory build/web-mobile",
     "test:watch": "vitest",
