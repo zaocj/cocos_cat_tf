@@ -1,6 +1,6 @@
 import {
     _decorator, BlockInputEvents, Color, Component, EditBox, EventKeyboard, EventTouch, game, Game, Graphics, input, Input,
-    KeyCode, Label, Layers, Mask, Node, profiler, ResolutionPolicy, screen, sys, UITransform, Vec3, view,
+    isValid, KeyCode, Label, Layers, Mask, Node, profiler, Rect, resources, ResolutionPolicy, screen, Size, Sprite, SpriteFrame, sys, UITransform, Vec2, Vec3, view,
 } from 'cc';
 import { ActionError, ECONOMY, MvpSession, PATH, PETS, PET_ORDER, PetActionResult, MergeResult, PocketResult, PetId, SLOTS, STEP, EnemyState, RestChoice, pointOnPath } from '../domain/MvpSession';
 import { isPortrait, PortraitLayout, portraitLayout, portraitSlotAt, PORTRAIT_MIN_HEIGHT, PORTRAIT_WIDTH, toPortraitBoard } from './PortraitLayout';
@@ -16,6 +16,27 @@ import { GuideId, GUIDE_IDS, GUIDES, nextGuide, PlayerProfile, recordMutationPro
 
 const { ccclass } = _decorator;
 type Selection = { kind: 'none' } | { kind: 'carried'; species: PetId } | { kind: 'pet'; id: number } | { kind: 'release' } | { kind: 'cultivate' };
+type UiSkin = 'button_primary' | 'button_secondary' | 'panel_standard' | 'panel_mutation';
+type BattleArt = 'forest_floor' | 'road_sand' | 'stump_open' | 'stump_locked' | 'cradle_tree';
+type ArtKey = UiSkin | BattleArt;
+const BATTLE_ART: Record<BattleArt, { asset: string; rect: readonly [number, number, number, number] }> = {
+    forest_floor: { asset: 'forest_floor', rect: [0, 0, 941, 1672] },
+    road_sand: { asset: 'forest_source', rect: [400, 420, 48, 48] },
+    stump_open: { asset: 'stump_open', rect: [242, 373, 770, 508] },
+    stump_locked: { asset: 'stump_locked', rect: [146, 190, 944, 801] },
+    cradle_tree: { asset: 'cradle_tree', rect: [93, 82, 1070, 1069] },
+};
+function isUiSkin(key: ArtKey): key is UiSkin { return key in UI_SKINS; }
+const UI_SKINS: Record<UiSkin, readonly [number, number, number, number]> = {
+    // Source-pixel insets: left, right, top, bottom. Borders scale uniformly with the art node.
+    button_primary: [350, 350, 120, 140], button_secondary: [220, 220, 100, 100],
+    panel_standard: [240, 220, 240, 240], panel_mutation: [240, 240, 300, 320],
+};
+// Source rectangles exclude near-transparent generation speckles; PNGs and importer metadata stay untouched.
+const UI_CROPS: Record<UiSkin, readonly [number, number, number, number]> = {
+    button_primary: [49, 92, 2070, 524], button_secondary: [39, 209, 1686, 467],
+    panel_standard: [21, 12, 1047, 1418], panel_mutation: [22, 32, 979, 1478],
+};
 interface SummonDrag {
     touchId: number; species: PetId;
     start: { x: number; y: number }; point: { x: number; y: number }; moved: boolean;
@@ -47,7 +68,7 @@ function freshSession(): MvpSession {
     return new MvpSession(seed);
 }
 
-/** Asset-free playable slice. All gameplay decisions live in MvpSession. */
+/** Playable MVP. All gameplay decisions live in MvpSession. */
 @ccclass('MvpGame')
 export class MvpGame extends Component {
     private session = freshSession();
@@ -105,6 +126,10 @@ export class MvpGame extends Component {
     private reservesOpen = false;
     private banishCandidate: PetId | null = null;
     private summonDrag: SummonDrag | null = null;
+    private uiArtReady = false;
+    private uiArtError = '';
+    private uiArtRequest = 0;
+    private uiFrames = new Map<ArtKey, { frame: SpriteFrame; source: SpriteFrame }>();
 
     onEnable(): void {
         input.on(Input.EventType.KEY_DOWN, this.onKey, this);
@@ -127,7 +152,12 @@ export class MvpGame extends Component {
         if (typeof window !== 'undefined') window.removeEventListener('pagehide', this.pageHide);
         if (this.orientationGate) this.orientationGate.style.display = 'none';
     }
-    onDestroy(): void { this.toast?.node?.destroy(); this.toast = null; this.orientationGate?.remove(); }
+    onDestroy(): void {
+        this.uiArtRequest++;
+        this.uiFrames.forEach(({ frame, source }) => { frame.destroy(); source.decRef(); });
+        this.uiFrames.clear();
+        this.toast?.node?.destroy(); this.toast = null; this.orientationGate?.remove();
+    }
     start(): void {
         profiler.hideStats();
         this.archive = new RunArchive(sys.localStorage);
@@ -135,6 +165,96 @@ export class MvpGame extends Component {
         this.profile = this.saved.data?.profile ?? { guideSeen: [] };
         this.speed = this.profile.speed ?? 1;
         this.onViewportResize();
+        this.loadUiArt();
+    }
+
+    private loadUiArt(): void {
+        const request = ++this.uiArtRequest;
+        this.uiArtError = ''; this.renderScreen();
+        const keys: ArtKey[] = [...Object.keys(UI_SKINS) as UiSkin[], ...Object.keys(BATTLE_ART) as BattleArt[]];
+        void Promise.all(keys.map(key => new Promise<{ key: ArtKey; frame: SpriteFrame | null; error: string }>(resolve => {
+            const path = isUiSkin(key) ? `art/ui/${key}/spriteFrame` : `art/environment/${BATTLE_ART[key].asset}/spriteFrame`;
+            resources.load(path, SpriteFrame, (error, frame) => {
+                if (!error && frame) frame.addRef();
+                resolve({ key, frame: !error && frame ? frame : null,
+                    error: error ? `${path}: ${error.message}` : frame ? '' : `${path}: 未返回 SpriteFrame` });
+            });
+        }))).then(results => {
+            if (!isValid(this.node) || request !== this.uiArtRequest) {
+                results.forEach(result => result.frame?.decRef()); return;
+            }
+            this.uiArtError = results.filter(result => result.error).map(result => result.error).join('\n');
+            if (this.uiArtError) {
+                results.forEach(result => result.frame?.decRef());
+                console.error(`[Game art] ${this.uiArtError}`); this.renderScreen(); return;
+            }
+            results.forEach(({ key, frame: source }) => {
+                if (!source) return;
+                const frame = source.clone();
+                frame.rect = new Rect(...(isUiSkin(key) ? UI_CROPS[key] : BATTLE_ART[key].rect));
+                // Normalize the cropped frame so transparent canvas padding cannot shrink the visible button.
+                frame.originalSize = new Size(frame.rect.width, frame.rect.height);
+                frame.offset = new Vec2(0, 0);
+                const [left, right, top, bottom] = isUiSkin(key) ? UI_SKINS[key] : [0, 0, 0, 0];
+                frame.insetLeft = left; frame.insetRight = right; frame.insetTop = top; frame.insetBottom = bottom;
+                frame.packable = false;
+                this.uiFrames.set(key, { frame, source });
+            });
+            this.uiArtReady = true; this.renderScreen();
+        });
+    }
+
+    private skinImage(parent: Node, key: UiSkin, x: number, y: number, width: number, height: number, tint = '#FFFFFF'): boolean {
+        const frame = this.uiFrames.get(key)?.frame;
+        if (!frame) return false;
+        const scale = Math.min(width / frame.rect.width, height / frame.rect.height);
+        const node = this.uiNode(`Art-${key}`, parent, x, y, width / scale, height / scale);
+        node.setScale(scale, scale, 1);
+        const sprite = node.addComponent(Sprite);
+        sprite.sizeMode = Sprite.SizeMode.CUSTOM; sprite.type = Sprite.Type.SLICED;
+        sprite.spriteFrame = frame; sprite.color = color(tint);
+        return true;
+    }
+
+    private battleImage(parent: Node, key: BattleArt, x: number, y: number, width: number, height: number,
+        type = Sprite.Type.SIMPLE): Sprite {
+        const frame = this.uiFrames.get(key)?.frame;
+        if (!frame) throw new Error(`Battle art not loaded: ${key}`);
+        const node = this.uiNode(`Art-${key}`, parent, x, y, width, height);
+        const sprite = node.addComponent(Sprite);
+        sprite.sizeMode = Sprite.SizeMode.CUSTOM; sprite.type = type; sprite.spriteFrame = frame;
+        return sprite;
+    }
+
+    private drawBattleArt(root: Node): void {
+        const { arenaCenter, arenaHeight, scale } = this.layout;
+        const field = this.uiNode('BattlefieldArt', root, 0, arenaCenter, 656, arenaHeight);
+        field.addComponent(Mask).type = Mask.Type.GRAPHICS_RECT;
+        // Only the noninteractive background uses cover; every gameplay position keeps the same uniform projection.
+        const cover = Math.max(656 / 941, arenaHeight / 1672);
+        this.battleImage(field, 'forest_floor', 0, 0, 941 * cover, 1672 * cover);
+        const points = PATH.map(point => {
+            const p = this.boardPoint(point); return { x: p.x, y: p.y - arenaCenter };
+        });
+        const roadShape = (g: Graphics, width: number, tint: string): void => {
+            for (let i = 1; i < points.length; i++) this.line(g, points[i - 1].x, points[i - 1].y, points[i].x, points[i].y, tint, width * scale);
+            for (const point of points) this.circle(g, point.x, point.y, width * scale / 2, tint);
+        };
+        roadShape(this.graphics(field, 'RoadGrassEdge'), 52, '#A6B55B');
+        const road = this.uiNode('RoadTextureMask', field, 0, 0, 656, arenaHeight);
+        const mask = road.addComponent(Mask); mask.type = Mask.Type.GRAPHICS_STENCIL;
+        const stencil = mask.subComp;
+        if (!(stencil instanceof Graphics)) throw new Error('Road stencil requires Cocos 3.8.8 Graphics mask');
+        stencil.clear(); roadShape(stencil, 44, '#FFFFFF');
+        this.battleImage(road, 'road_sand', 0, 0, 656, arenaHeight, Sprite.Type.TILED);
+        SLOTS.forEach((slot, index) => {
+            const p = this.boardPoint(slot); const open = this.session.isSlotOpen(index);
+            const key = open ? 'stump_open' : 'stump_locked';
+            const rect = BATTLE_ART[key].rect; const width = (open ? 90 : 96) * scale;
+            this.battleImage(field, key, p.x, p.y - arenaCenter - (open ? 30 : 18) * scale, width, width * rect[3] / rect[2]);
+        });
+        const base = points[points.length - 1];
+        this.battleImage(field, 'cradle_tree', base.x - 6 * scale, base.y - 24 * scale, 112 * scale, 112 * scale * 1069 / 1070);
     }
     update(dt: number): void {
         const heartBefore = this.session.heart; const killsBefore = this.session.kills;
@@ -277,7 +397,8 @@ export class MvpGame extends Component {
         const modal = this.uiNode(name, root); modal.addComponent(BlockInputEvents);
         const art = modal.addComponent(Graphics); art.fillColor = color(C.ink, 170);
         art.rect(-360, this.layout.bottom, 720, this.layout.height); art.fill();
-        this.rect(art, 0, 0, 656, height, C.white, 22); return modal;
+        if (!this.skinImage(modal, 'panel_standard', 0, 0, 656, height)) this.rect(art, 0, 0, 656, height, C.white, 22);
+        return modal;
     }
 
     private drawHome(root: Node): void {
@@ -708,8 +829,12 @@ export class MvpGame extends Component {
     private button(parent: Node, title: string, x: number, y: number, w: number, h: number,
         action: () => void, fill = C.green, textTint = C.white, active = true, fontSize = 26): Node {
         const node = this.uiNode(title, parent, x, y, w, h);
-        const g = node.addComponent(Graphics); this.rect(g, 0, 0, w, h, active ? fill : C.pale);
-        this.text(node, title, 0, 0, fontSize, w - 20, active ? textTint : C.muted, false, true, h);
+        const primary = active && fill === C.green;
+        const artTint = !active ? '#CCD3C6' : fill === C.spore ? '#D8B7E8' : fill === C.orange ? '#F3C18F' : '#FFFFFF';
+        const skinned = w >= 110 && h >= 50 && this.skinImage(node, primary ? 'button_primary' : 'button_secondary', 0, 0, w, h, artTint);
+        if (!skinned) { const g = node.addComponent(Graphics); this.rect(g, 0, 0, w, h, active ? fill : C.pale); }
+        const labelTint = skinned && !primary && textTint === C.white ? fill : textTint;
+        this.text(node, title, 0, 0, fontSize, w - 20, active ? labelTint : C.muted, false, true, h);
         if (active) {
             node.on(Node.EventType.TOUCH_END, () => {
                 if (!this.summonDrag) { this.inspectedPetId = null; this.infoOpen = false; action(); }
@@ -793,6 +918,15 @@ export class MvpGame extends Component {
             root.addComponent(BlockInputEvents);
             this.text(root, '请竖屏游玩', 0, 30, 44, 640, C.green, false, true, 90);
             this.text(root, '本游戏仅支持竖屏\n调整设备或窗口方向后继续', 0, -70, 28, 640, C.muted, false, false, 110);
+            return;
+        }
+        if (!this.uiArtReady) {
+            root.addComponent(BlockInputEvents);
+            this.text(root, this.uiArtError ? '美术素材加载失败' : '正在载入森林…', 0, 80, 34, 620, C.green, false, true, 80);
+            if (this.uiArtError) {
+                this.text(root, this.uiArtError, 0, -50, 21, 600, C.red, false, false, 180);
+                this.button(root, '重试加载', 0, -220, 360, 84, () => this.loadUiArt());
+            }
             return;
         }
         if (this.atHome) { this.drawHome(root); return; }
@@ -927,29 +1061,9 @@ export class MvpGame extends Component {
         this.text(root, `${current.name} · 第 ${session.visited.length + 1} 站`, -155, top - 44, 26, 300, C.ink, false, true, 40);
         this.counter = this.text(root, '', -94, top - 86, 22, 430, C.muted, true, false, 36);
         this.dewLabel = this.text(root, '', 234, top - 85, 28, 180, C.green, false, true, 42);
-        this.rect(g, 0, arenaCenter, 656, arenaHeight, C.board, 22);
-        for (let i = 0; i < 18; i++) {
-            this.circle(g, i % 2 === 0 ? -290 : 290, this.layout.arenaBottom + 38 + (i * 97 % (arenaHeight - 76)), 4 + i % 3, '#BCCFAC');
-        }
-        const points = PATH.map(p => this.boardPoint(p));
-        for (let i = 1; i < points.length; i++) {
-            this.line(g, points[i - 1].x, points[i - 1].y, points[i].x, points[i].y, C.roadEdge, 52);
-            this.line(g, points[i - 1].x, points[i - 1].y, points[i].x, points[i].y, C.road, 44);
-        }
-        for (const p of points) this.circle(g, p.x, p.y, 22, C.road);
-        for (let i = 0; i < SLOTS.length; i++) {
-            const p = this.boardPoint(SLOTS[i]);
-            this.circle(g, p.x, p.y, 35, '#BED0AE'); this.circle(g, p.x, p.y, 29, '#F9F5E7');
-            if (session.isSlotOpen(i)) {
-                this.line(g, p.x - 8, p.y, p.x + 8, p.y, '#899C79', 2);
-                this.line(g, p.x, p.y - 8, p.x, p.y + 8, '#899C79', 2);
-            } else this.vines(g, p.x, p.y);
-        }
+        this.drawBattleArt(root);
         const board = this.uiNode('BattlePlacement', root, 0, arenaCenter, 656, arenaHeight);
         board.on(Node.EventType.TOUCH_START, this.startBoardGesture, this); this.bindGesture(board);
-        const base = points[points.length - 1]; const entry = points[0];
-        this.tree(g, base.x, base.y, 0.66);
-        this.text(root, '摇篮树', base.x - 112, base.y - 12, 22, 140, C.green, false, true, 38);
         for (let i = 0; i < ECONOMY.carryLimit; i++) {
             const species = session.carriedPets[i]; const x = -280 + i * 80;
             if (species) this.petCard(root, species, x, bottom + 164);
@@ -998,7 +1112,7 @@ export class MvpGame extends Component {
         const modal = this.uiNode('MutationChoice', root); modal.addComponent(BlockInputEvents);
         const g = this.graphics(modal); g.fillColor = color(C.ink, 170);
         g.rect(-360, -this.layout.top, 720, this.layout.height); g.fill();
-        this.rect(g, 0, 0, 656, 930, C.bg, 22);
+        if (!this.skinImage(modal, 'panel_mutation', 0, 0, 656, 930)) this.rect(g, 0, 0, 656, 930, C.bg, 22);
         this.text(modal, pending.source === 'metamorphosis' ? '主动蜕变' : '发生变异！', 0, 392, 38, 600, C.spore, false, true, 70);
         this.text(modal, `${PETS[pet.species].name} · ${pet.star}星 · 变异 ${pet.mutations.length}/${PET_GROWTH.mutationsByStar[pet.star - 1]}`, 0, 330, 28, 600, C.ink, false, true, 48);
         this.text(modal, `已保留：${mutationNames(pet.species, pet.mutations)}`, 0, 278, 22, 600, C.muted, false, false, 60);
@@ -1178,7 +1292,7 @@ export class MvpGame extends Component {
         const modal = this.uiNode('ReserveSelection', root); modal.addComponent(BlockInputEvents);
         const g = this.graphics(modal); g.fillColor = color(C.ink, 145);
         g.rect(-360, -this.layout.top, 720, this.layout.height); g.fill();
-        this.rect(g, 0, 0, 656, 650, C.white, 20);
+        if (!this.skinImage(modal, 'panel_standard', 0, 0, 656, 650)) this.rect(g, 0, 0, 656, 650, C.white, 20);
         this.text(modal, '后备伙伴', 0, 268, 32, 600, C.ink, false, true, 60);
         this.text(modal, this.mergeSourceId !== null ? '选择同种同星素材，合入已选伙伴' : this.selected.kind === 'release' ? '选择后备伙伴放生，返还 60% 灵露' : '选择伙伴，再点击树桩免费部署', 0, 211, 24, 600, C.muted, false, false, 46);
         const releasing = this.selected.kind === 'release';
@@ -1518,7 +1632,7 @@ export class MvpGame extends Component {
         const modal = this.uiNode('Result', root); modal.addComponent(BlockInputEvents);
         const shade = this.graphics(modal); shade.fillColor = color(C.ink, 145);
         shade.rect(-360, -this.layout.top, 720, this.layout.height); shade.fill();
-        this.rect(shade, 0, 0, 640, 620, C.white, 20);
+        if (!this.skinImage(modal, 'panel_standard', 0, 0, 640, 620)) this.rect(shade, 0, 0, 640, 620, C.white, 20);
         this.text(modal, won ? '这一站，守住了。' : '树心耗尽了。', 0, 218, 36, 590, won ? C.green : C.red, false, true, 84);
         this.text(modal, won ? `击退 ${this.session.kills} 只 · 漏过 ${this.session.leaked} 只\n树心 ${this.session.heart}/${this.session.maxHeart} · 灵露 ${this.session.dew}`
             : '雾兽突破防线，摇篮树失去生机。\n整理阵容，再次出发。', 0, 105, 26, 580, C.muted, false, false, 110);
