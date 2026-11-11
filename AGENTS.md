@@ -4,6 +4,8 @@
 
 ## 当前实施范围：MVP（优先于下文完整 V0.1 规则）
 
+2026-11-11 爪爪猫动画：assets/resources/art/pets/cat_sheet.png 实际2172×724，6列2行，每格362；固定脚底锚点。CatAnimation 纯表现查询，实际提交攻击后读 tick/lastAttack/attackCount，暂停冻结、搬迁停手不挥爪；不能由动画事件扣血或重置攻击。MvpGame 按实例缓存 Sprite，静态头像/拖动用首帧，UI重建清视图但不改会话；帧纹理共享、引用成对释放，规范见 ART_ASSETS 第7节。
+
 2026-11-11 森林战场：assets/resources/art/environment 保存原图副本、草地派生底图、透明开放/封锁树桩与摇篮树；BATTLE_ART 配置一次加载。禁止直接叠整图中的道路/树桩充当玩法位置：真实 PATH 决定纹理道路蒙版，SLOTS/会话决定16个树桩与藤蔓开垦显示。仅底图 cover，交互场景及角色仍统一等比投影；领域坐标、距离与内容版本不变。资源用途和 imagegen 提示词见 docs/ART_ASSETS.md、docs/BATTLE_ART_PROMPTS.md。
 
 2026-11-11 首批 UI 美术：四张底图在 assets/resources/art/ui，以 MvpGame 的 UI_SKINS/UI_CROPS 配置预加载、运行时克隆帧裁有效区域和九宫格；原 PNG 与导入身份不改，动态文字与交互保持。加载完再开放首页，失败显式重试；资源引用成对释放。用途/目录/替换规范见 docs/ART_ASSETS.md；其余未提供美术仍为 Graphics，不恢复已取消浮层及暂停按钮。

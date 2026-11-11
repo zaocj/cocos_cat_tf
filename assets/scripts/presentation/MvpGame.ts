@@ -13,12 +13,13 @@ import { RouteMapViewport } from './RouteMapViewport';
 import { RouteMapView } from './RouteMapView';
 import { ArchiveLoad, RunArchive } from '../infrastructure/RunArchive';
 import { GuideId, GUIDE_IDS, GUIDES, nextGuide, PlayerProfile, recordMutationProgress } from '../domain/FirstGuide';
+import { CAT_ANIMATION, catAnimationFrame } from './CatAnimation';
 
 const { ccclass } = _decorator;
 type Selection = { kind: 'none' } | { kind: 'carried'; species: PetId } | { kind: 'pet'; id: number } | { kind: 'release' } | { kind: 'cultivate' };
 type UiSkin = 'button_primary' | 'button_secondary' | 'panel_standard' | 'panel_mutation';
 type BattleArt = 'forest_floor' | 'road_sand' | 'stump_open' | 'stump_locked' | 'cradle_tree';
-type ArtKey = UiSkin | BattleArt;
+type ArtKey = UiSkin | BattleArt | 'cat_sheet';
 const BATTLE_ART: Record<BattleArt, { asset: string; rect: readonly [number, number, number, number] }> = {
     forest_floor: { asset: 'forest_floor', rect: [0, 0, 941, 1672] },
     road_sand: { asset: 'forest_source', rect: [400, 420, 48, 48] },
@@ -130,6 +131,10 @@ export class MvpGame extends Component {
     private uiArtError = '';
     private uiArtRequest = 0;
     private uiFrames = new Map<ArtKey, { frame: SpriteFrame; source: SpriteFrame }>();
+    private catFrames: SpriteFrame[] = [];
+    private catViews = new Map<number, Sprite>();
+    private catDragSprite: Sprite | null = null;
+    private prepareAnimationTime = 0;
 
     onEnable(): void {
         input.on(Input.EventType.KEY_DOWN, this.onKey, this);
@@ -156,6 +161,8 @@ export class MvpGame extends Component {
         this.uiArtRequest++;
         this.uiFrames.forEach(({ frame, source }) => { frame.destroy(); source.decRef(); });
         this.uiFrames.clear();
+        this.catFrames.forEach(frame => frame.destroy()); this.catFrames = [];
+        this.catViews.clear(); this.catDragSprite = null;
         this.toast?.node?.destroy(); this.toast = null; this.orientationGate?.remove();
     }
     start(): void {
@@ -171,9 +178,10 @@ export class MvpGame extends Component {
     private loadUiArt(): void {
         const request = ++this.uiArtRequest;
         this.uiArtError = ''; this.renderScreen();
-        const keys: ArtKey[] = [...Object.keys(UI_SKINS) as UiSkin[], ...Object.keys(BATTLE_ART) as BattleArt[]];
+        const keys: ArtKey[] = [...Object.keys(UI_SKINS) as UiSkin[], ...Object.keys(BATTLE_ART) as BattleArt[], 'cat_sheet'];
         void Promise.all(keys.map(key => new Promise<{ key: ArtKey; frame: SpriteFrame | null; error: string }>(resolve => {
-            const path = isUiSkin(key) ? `art/ui/${key}/spriteFrame` : `art/environment/${BATTLE_ART[key].asset}/spriteFrame`;
+            const path = key === 'cat_sheet' ? 'art/pets/cat_sheet/spriteFrame'
+                : isUiSkin(key) ? `art/ui/${key}/spriteFrame` : `art/environment/${BATTLE_ART[key].asset}/spriteFrame`;
             resources.load(path, SpriteFrame, (error, frame) => {
                 if (!error && frame) frame.addRef();
                 resolve({ key, frame: !error && frame ? frame : null,
@@ -184,6 +192,10 @@ export class MvpGame extends Component {
                 results.forEach(result => result.frame?.decRef()); return;
             }
             this.uiArtError = results.filter(result => result.error).map(result => result.error).join('\n');
+            const sheet = results.find(result => result.key === 'cat_sheet')?.frame;
+            if (sheet && (sheet.originalSize.width !== CAT_ANIMATION.columns * CAT_ANIMATION.cellSize
+                || sheet.originalSize.height !== CAT_ANIMATION.rows * CAT_ANIMATION.cellSize))
+                this.uiArtError = 'art/pets/cat_sheet: 需要 2172×724、两行六列的爪爪猫序列图';
             if (this.uiArtError) {
                 results.forEach(result => result.frame?.decRef());
                 console.error(`[Game art] ${this.uiArtError}`); this.renderScreen(); return;
@@ -191,6 +203,16 @@ export class MvpGame extends Component {
             results.forEach(({ key, frame: source }) => {
                 if (!source) return;
                 const frame = source.clone();
+                if (key === 'cat_sheet') {
+                    const { cellSize, columns, rows } = CAT_ANIMATION;
+                    for (let row = 0; row < rows; row++) for (let col = 0; col < columns; col++) {
+                        const cell = source.clone();
+                        cell.rect = new Rect(col * cellSize, row * cellSize, cellSize, cellSize);
+                        cell.originalSize = new Size(cellSize, cellSize); cell.offset = new Vec2(0, 0);
+                        cell.packable = false; this.catFrames.push(cell);
+                    }
+                    this.uiFrames.set(key, { frame, source }); return;
+                }
                 frame.rect = new Rect(...(isUiSkin(key) ? UI_CROPS[key] : BATTLE_ART[key].rect));
                 // Normalize the cropped frame so transparent canvas padding cannot shrink the visible button.
                 frame.originalSize = new Size(frame.rect.width, frame.rect.height);
@@ -226,6 +248,16 @@ export class MvpGame extends Component {
         return sprite;
     }
 
+    private catSprite(parent: Node, x: number, y: number, size: number, grounded = false): Sprite {
+        const frame = this.catFrames[0];
+        if (!frame) throw new Error('Cat sprite sheet has not loaded');
+        const node = this.uiNode('CatSprite', parent, x, y, size, size);
+        if (grounded) node.getComponent(UITransform)?.setAnchorPoint(0.5, 1 - CAT_ANIMATION.footY / CAT_ANIMATION.cellSize);
+        const sprite = node.addComponent(Sprite); sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        sprite.spriteFrame = frame;
+        return sprite;
+    }
+
     private drawBattleArt(root: Node): void {
         const { arenaCenter, arenaHeight, scale } = this.layout;
         const field = this.uiNode('BattlefieldArt', root, 0, arenaCenter, 656, arenaHeight);
@@ -258,6 +290,9 @@ export class MvpGame extends Component {
     }
     update(dt: number): void {
         const heartBefore = this.session.heart; const killsBefore = this.session.kills;
+        if (!this.atHome && !this.menuOpen && !this.guideActive && !this.saveProblem && !this.orientationBlocked
+            && this.session.phase === 'prepare' && !this.session.paused)
+            this.prepareAnimationTime += Math.min(dt, 0.1);
         const drag = this.summonDrag;
         if (drag) {
             drag.elapsed = Math.max(drag.elapsed + Math.min(dt, 0.1), (this.gestureTime() - drag.startedAt) / 1000);
@@ -909,6 +944,7 @@ export class MvpGame extends Component {
         this.summonDrag = null;
         if (this.screenRoot) { this.screenRoot.removeFromParent(); this.screenRoot.destroy(); }
         this.dynamic = null; this.dragVisual = null; this.counter = null; this.lastCounter = ''; this.infoRoot = null;
+        this.catViews.clear(); this.catDragSprite = null;
         this.heartLabel = null; this.dewLabel = null; this.deploymentLabel = null;
         this.infoTitle = null; this.infoStats = null; this.infoEffect = null; this.infoMeta = null; this.infoAction = null;
         const root = this.uiNode('PortraitMVP', this.node); this.screenRoot = root;
@@ -1387,6 +1423,12 @@ export class MvpGame extends Component {
 
     private drawDynamic(g: Graphics): void {
         g.clear(); this.dragVisual?.clear(); const s = this.session;
+        if (this.catDragSprite) this.catDragSprite.node.active = false;
+        this.catViews.forEach((sprite, id) => {
+            if (!s.pets.some(pet => pet.id === id && pet.species === 'cat' && pet.slot !== null)) {
+                sprite.node.destroy(); this.catViews.delete(id);
+            }
+        });
         if (s.phase === 'prepare' || s.phase === 'battle') {
             const selected = this.selected;
             const pet = selected.kind === 'pet' ? s.pets.find(p => p.id === selected.id) : undefined;
@@ -1445,7 +1487,18 @@ export class MvpGame extends Component {
         }
         for (const pet of s.pets) {
             if (pet.slot === null) continue;
-            const p = this.boardPoint(SLOTS[pet.slot]); this.petIcon(g, p.x, p.y + 4, pet.species, 0.95);
+            const p = this.boardPoint(SLOTS[pet.slot]);
+            if (pet.species === 'cat') {
+                let sprite = this.catViews.get(pet.id);
+                if (!sprite) {
+                    sprite = this.catSprite(g.node, p.x, p.y - 18 * this.layout.scale, 100 * this.layout.scale, true);
+                    this.catViews.set(pet.id, sprite);
+                }
+                sprite.node.setPosition(p.x, p.y - 18 * this.layout.scale);
+                const idleTick = s.phase === 'prepare' ? this.prepareAnimationTime / STEP : s.tick;
+                const frame = this.catFrames[catAnimationFrame(s.tick, pet.lastAttack, pet.attackCount, pet.readyTick, idleTick)];
+                if (frame && sprite.spriteFrame !== frame) sprite.spriteFrame = frame;
+            } else this.petIcon(g, p.x, p.y + 4, pet.species, 0.95);
             if (pet.species === 'cat' && pet.mutations.length) {
                 if (pet.mutations.includes('longarm')) {
                     for (const side of [-1, 1]) this.line(g, p.x + side * 24, p.y - 7, p.x + side * 42, p.y + 7, C.orange, 5);
@@ -1460,8 +1513,9 @@ export class MvpGame extends Component {
                 badge = this.text(g.node, '', 0, 0, 24, 40, C.ink, false, true, 36);
                 this.starLabels.set(pet.id, badge);
             }
-            this.circle(g, p.x, p.y + 60, 15, C.white);
-            badge.node.setPosition(p.x, p.y + 60);
+            const badgeY = p.y + (pet.species === 'cat' ? 82 * this.layout.scale : 60);
+            this.circle(g, p.x, badgeY, 15, C.white);
+            badge.node.setPosition(p.x, badgeY);
             if (badge.string !== `${pet.star}`) badge.string = `${pet.star}`;
             badge.color = color(pet.mutations.length ? C.spore : pet.star > 1 ? C.orange : C.green);
             if (this.mergeSourceId !== null && s.mergeError(pet.id, this.mergeSourceId) === null) {
@@ -1513,7 +1567,10 @@ export class MvpGame extends Component {
             this.circle(avatar, x, y, 35, C.white, 230);
             if (release) this.ropeIcon(avatar, x, y);
             else if (cultivate) this.shovelIcon(avatar, x, y);
-            else this.petIcon(avatar, x, y, drag.species, 1);
+            else if (drag.species === 'cat') {
+                if (!this.catDragSprite) this.catDragSprite = this.catSprite(avatar.node, x, y, 96);
+                this.catDragSprite.node.active = true; this.catDragSprite.node.setPosition(x, y);
+            } else this.petIcon(avatar, x, y, drag.species, 1);
             if (drag.selection.kind === 'pet' && this.overRope(drag.point)) {
                 avatar.strokeColor = color(C.orange); avatar.lineWidth = 4;
                 avatar.roundRect(244, this.layout.bottom + 111, 72, 106, 18); avatar.stroke();
@@ -1580,13 +1637,11 @@ export class MvpGame extends Component {
     }
 
     private petIcon(g: Graphics, x: number, y: number, id: PetId, scale: number): void {
+        // Static portrait callers create this once per UI build; live cats use cached catViews.
+        if (id === 'cat') { this.catSprite(g.node, x, y, 88 * scale); return; }
         const r = 27 * scale;
-        const fill = id === 'cat' ? C.cat : id === 'rabbit' ? C.rabbit : id === 'deer' ? C.deer : id === 'vine' ? C.vine : id === 'sparrow' ? C.sparrow : C.mushroom;
-        if (id === 'cat') {
-            g.fillColor = color(fill);
-            g.moveTo(x - r, y + r * 0.4); g.lineTo(x - r * 0.8, y + r * 1.5); g.lineTo(x - r * 0.1, y + r * 0.7); g.close(); g.fill();
-            g.moveTo(x + r, y + r * 0.4); g.lineTo(x + r * 0.8, y + r * 1.5); g.lineTo(x + r * 0.1, y + r * 0.7); g.close(); g.fill();
-        } else if (id === 'rabbit') {
+        const fill = id === 'rabbit' ? C.rabbit : id === 'deer' ? C.deer : id === 'vine' ? C.vine : id === 'sparrow' ? C.sparrow : C.mushroom;
+        if (id === 'rabbit') {
             g.fillColor = color(fill);
             g.ellipse(x - r * 0.45, y + r, r * 0.27, r * 0.95); g.ellipse(x + r * 0.45, y + r, r * 0.27, r * 0.95); g.fill();
         }
