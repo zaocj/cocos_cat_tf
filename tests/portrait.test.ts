@@ -27,7 +27,7 @@ test('roads and 88-unit touch regions fit inside the portrait arena and select t
     }
 });
 
-test('expanded portrait projection and elliptical ranges preserve logical attack distances', () => {
+test('uniform portrait projection preserves logical attack distances', () => {
     const layout = portraitLayout(1558);
     for (const slot of SLOTS) for (const p of PATH) {
         const a = toPortraitBoard(slot, layout); const b = toPortraitBoard(p, layout);
@@ -39,4 +39,23 @@ test('expanded portrait projection and elliptical ranges preserve logical attack
     expect(SLOTS.length).toBe(16);
     for (let i = 0; i < SLOTS.length; i++) for (let j = i + 1; j < SLOTS.length; j++)
         expect(distance(toPortraitBoard(SLOTS[i], layout), toPortraitBoard(SLOTS[j], layout)) >= 88).toBeTruthy();
+});
+
+test('range boundaries stay circular and agree with gameplay distances on short and tall portraits', () => {
+    for (const height of [1280, 1440, 1558, 1700, 2200]) {
+        const layout = portraitLayout(height);
+        expect(layout.scaleY).toBe(layout.scale);
+        for (const slot of SLOTS) for (const radius of [94, 150.4, 185, 215]) {
+            const center = toPortraitBoard(slot, layout);
+            for (let step = 0; step < 24; step++) {
+                const angle = step * Math.PI / 12;
+                for (const ratio of [0.99, 1, 1.01]) {
+                    const target = { x: slot.x + Math.cos(angle) * radius * ratio, y: slot.y + Math.sin(angle) * radius * ratio };
+                    const displayedDistance = distance(center, toPortraitBoard(target, layout));
+                    expect(displayedDistance).toBeCloseTo(radius * layout.scale * ratio, 8);
+                    if (ratio !== 1) expect(displayedDistance < radius * layout.scale).toBe(distance(slot, target) < radius);
+                }
+            }
+        }
+    }
 });

@@ -16,12 +16,15 @@ export function portraitLayout(visibleHeight: number): PortraitLayout {
     const arenaTop = top - 132; const arenaBottom = bottom + 260;
     const arenaHeight = arenaTop - arenaBottom;
     const arenaCenter = (arenaTop + arenaBottom) / 2;
+    // A single scale preserves angles and distances: a gameplay radius stays circular.
+    // Extra portrait height is padding around the board, never a stretch of its Y axis.
+    const scale = Math.min(1.08, (arenaHeight - 156) / 600);
     return { height, top, bottom, arenaTop, arenaBottom, arenaHeight,
         // Leave room above the entrance for elite/BOSS labels, and below the tree for its trunk.
-        arenaCenter, boardCenter: arenaCenter - 26, scale: 1.08, scaleY: (arenaHeight - 156) / 600 };
+        arenaCenter, boardCenter: arenaCenter - 26, scale, scaleY: scale };
 }
 
-/** Fill the available battlefield; logical circles are displayed as ellipses using these same axes. */
+/** Uniform projection for roads, stumps, enemies, projectiles, touch targets and ranges. */
 export function toPortraitBoard(point: Point, layout: PortraitLayout): Point {
     return { x: point.x * layout.scale, y: layout.boardCenter + point.y * layout.scaleY };
 }

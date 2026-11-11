@@ -1,4 +1,4 @@
-import { PET_GROWTH, Star, MutationId } from './PetGrowth';
+import { PET_GROWTH, Star, MutationId, MutationRecord, isMutationForSpecies, mutationChoices, mutationKey, mutationResult, MUTATION_FORM_COUNT } from './PetGrowth';
 import { ENEMIES, ENEMY_BALANCE, EnemyKind } from './EnemyConfig';
 import { generateRoute, RouteNode, ROUTE_DEPTHS } from './ExpeditionRoute';
 export type { RouteNode } from './ExpeditionRoute';
@@ -39,16 +39,16 @@ export const SLOTS: readonly Point[] = [
 export const LOCKED_SLOTS: readonly number[] = [1, 3, 7, 10, 11, 12, 14, 15];
 export interface PetState {
     id: number; species: PetId; slot: number | null;
-    star: Star; mutation: MutationId | null; attackCount: number;
+    star: Star; mutations: readonly MutationId[]; attackCount: number;
     readonly purchaseCost: number; cooldown: number; lastAttack: number; readyTick: number;
 }
 export type ActionError = 'WRONG_PHASE' | 'PAUSED' | 'INVALID_SLOT' | 'INVALID_SPECIES'
-    | 'SLOT_OCCUPIED' | 'SLOT_LOCKED' | 'SLOT_OPEN' | 'INSUFFICIENT_DEW' | 'NO_FREE_SLOT' | 'NOT_CARRIED' | 'ALREADY_CARRIED' | 'CARRY_FULL' | 'BANISHED' | 'LAST_ATTACKER' | 'ROSTER_FULL' | 'PET_NOT_FOUND' | 'SAME_PET' | 'SPECIES_MISMATCH' | 'STAR_MISMATCH' | 'MAX_STARS';
+    | 'SLOT_OCCUPIED' | 'SLOT_LOCKED' | 'SLOT_OPEN' | 'INSUFFICIENT_DEW' | 'NO_FREE_SLOT' | 'NOT_CARRIED' | 'ALREADY_CARRIED' | 'CARRY_FULL' | 'BANISHED' | 'LAST_ATTACKER' | 'ROSTER_FULL' | 'PET_NOT_FOUND' | 'SAME_PET' | 'SPECIES_MISMATCH' | 'STAR_MISMATCH' | 'MAX_STARS' | 'NO_MUTATION_CREDIT' | 'STAR_TOO_LOW' | 'INVALID_MUTATION_INDEX' | 'NO_NEW_MUTATION';
 export type PetActionResult = { ok: true; pet: PetState } | { ok: false; reason: ActionError };
 export type CultivationResult = { ok: true; slot: number } | { ok: false; reason: ActionError };
 export type ReleaseResult = { ok: true; refund: number; species: PetId } | { ok: false; reason: ActionError };
 export type MergeResult = { ok: true; pet: PetState; mutationRequired: boolean } | { ok: false; reason: ActionError };
-export interface PendingMutation { petId: number; choices: readonly MutationId[]; resumePhase: 'prepare' | 'battle'; pauseAfterChoice: boolean }
+export interface PendingMutation { petId: number; choices: readonly MutationId[]; source: 'merge' | 'metamorphosis'; replacementIndex: number | null; resumePhase: 'prepare' | 'battle'; pauseAfterChoice: boolean }
 export interface PetStats { damage: number; interval: number; range: number; boost: number }
 export interface EnemyState extends Point { id: number; kind: EnemyKind; distance: number; hp: number; maxHp: number; lastDamageTick: number }
 export interface ProjectileState extends Point { id: number; targetId: number; damage: number }
@@ -56,8 +56,11 @@ export interface AttackMark { from: Point; to: Point; expires: number; kind: Pet
 export interface VineWall { id: number; ownerId: number; distance: number; expiresTick: number; durationTicks: number }
 export type PocketResult = { ok: true; species: PetId; cost: number } | { ok: false; reason: ActionError };
 export interface RunSnapshot {
+    debugModified: boolean;
     seed: number; mutationChance: number; mutationState: number; summonState: number;
     pocket: readonly PetId[]; banished: readonly PetId[]; phase: Phase; pendingMutation: PendingMutation | null;
+    mutationRewardDepths: readonly number[]; mutationCreditsSpent: number;
+    usedMutations: readonly MutationRecord[]; battleMutations: readonly MutationRecord[];
     heart: number; dew: number; paused: boolean; tick: number; kills: number; leaked: number; spawned: number;
     visited: string[]; currentId: string | null; unlockedSlots: number[]; pets: PetState[]; enemies: EnemyState[];
     projectiles: ProjectileState[]; marks: AttackMark[]; vineWalls: VineWall[]; nextId: number; nextSpawn: number;
@@ -81,14 +84,20 @@ export function pointOnPath(travel: number): Point {
 export class MvpSession {
     readonly route: readonly RouteNode[];
     readonly routeDepths = ROUTE_DEPTHS;
-    readonly mutationChance: number;
+    private chance: number;
+    get mutationChance(): number { return this.chance; }
+    debugModified = false;
     private pocket: readonly PetId[];
     private banished: readonly PetId[] = Object.freeze([]);
     private mutationState: number;
     private summonState: number;
+    private rewardedDepths: readonly number[] = Object.freeze([]);
+    private creditsSpent = 0;
+    private usedForms: readonly MutationRecord[] = Object.freeze([]);
+    private battleForms: readonly MutationRecord[] = Object.freeze([]);
     constructor(readonly seed = 1, options: { mutationChance?: number; carriedPets?: readonly PetId[] } = {}) {
         this.route = generateRoute(seed);
-        this.mutationChance = options.mutationChance ?? PET_GROWTH.mutationChance;
+        this.chance = options.mutationChance ?? PET_GROWTH.mutationChance;
         if (!Number.isFinite(this.mutationChance) || this.mutationChance < 0 || this.mutationChance > 1)
             throw new RangeError('mutationChance must be between 0 and 1');
         this.mutationState = (seed ^ 0x9E3779B9) >>> 0;
@@ -103,6 +112,18 @@ export class MvpSession {
     get summonRngState(): number { return this.summonState; }
     get carriedPets(): readonly PetId[] { return this.pocket; }
     get banishedPets(): readonly PetId[] { return this.banished; }
+    get mutationCredits(): number { return this.rewardedDepths.length - this.creditsSpent; }
+    get mutationRewardDepths(): readonly number[] { return this.rewardedDepths; }
+    get usedMutations(): readonly MutationRecord[] { return this.usedForms; }
+
+    applyDebugSettings(dew: number, mutationChance: number): { ok: true } | { ok: false; reason: 'WRONG_PHASE' | 'INVALID_DEW' | 'INVALID_CHANCE' } {
+        if (this.phase === 'mutation' || this.phase === 'lost' || this.phase === 'complete') return { ok: false, reason: 'WRONG_PHASE' };
+        if (!Number.isSafeInteger(dew) || dew < 0 || dew > 1000000) return { ok: false, reason: 'INVALID_DEW' };
+        if (!Number.isFinite(mutationChance) || mutationChance < 0 || mutationChance > 1) return { ok: false, reason: 'INVALID_CHANCE' };
+        if (this.dew !== dew || this.chance !== mutationChance) this.debugModified = true;
+        this.dew = dew; this.chance = mutationChance;
+        return { ok: true };
+    }
 
     phase: Phase = 'map';
     pendingMutation: PendingMutation | null = null;
@@ -128,7 +149,10 @@ export class MvpSession {
     snapshot(): RunSnapshot {
         // Return detached, JSON-safe data. UI/serialization must never hold live simulation references.
         return JSON.parse(JSON.stringify({ seed: this.seed, mutationChance: this.mutationChance,
+            debugModified: this.debugModified,
             mutationState: this.mutationState, summonState: this.summonState, pocket: this.pocket, banished: this.banished,
+            mutationRewardDepths: this.rewardedDepths, mutationCreditsSpent: this.creditsSpent,
+            usedMutations: this.usedForms, battleMutations: this.battleForms,
             phase: this.phase, pendingMutation: this.pendingMutation, heart: this.heart, dew: this.dew, paused: this.paused,
             tick: this.tick, kills: this.kills, leaked: this.leaked, spawned: this.spawned, visited: this.visited,
             currentId: this.current?.id ?? null, unlockedSlots: this.unlockedSlots, pets: this.pets, enemies: this.enemies,
@@ -141,12 +165,15 @@ export class MvpSession {
         const game = new MvpSession(data.seed, { mutationChance: data.mutationChance, carriedPets: data.pocket });
         game.banished = Object.freeze([...data.banished]);
         game.mutationState = data.mutationState; game.summonState = data.summonState;
+        game.debugModified = data.debugModified;
+        game.rewardedDepths = Object.freeze([...data.mutationRewardDepths]); game.creditsSpent = data.mutationCreditsSpent;
+        game.usedForms = freezeForms(data.usedMutations); game.battleForms = freezeForms(data.battleMutations);
         game.phase = data.phase; game.pendingMutation = data.pendingMutation; game.heart = data.heart; game.dew = data.dew;
         game.paused = data.paused; game.tick = data.tick; game.kills = data.kills; game.leaked = data.leaked;
         game.spawned = data.spawned; game.visited = data.visited;
         game.current = game.route.find(node => node.id === data.currentId) ?? null;
         game.unlockedSlots.splice(0, game.unlockedSlots.length, ...data.unlockedSlots);
-        game.pets = data.pets; game.enemies = data.enemies; game.projectiles = data.projectiles;
+        game.pets = data.pets.map(pet => ({ ...pet, mutations: Object.freeze([...pet.mutations]) })); game.enemies = data.enemies; game.projectiles = data.projectiles;
         game.marks = data.marks; game.vineWalls = data.vineWalls; game.nextId = data.nextId; game.nextSpawn = data.nextSpawn;
         return game;
     }
@@ -164,6 +191,7 @@ export class MvpSession {
         this.phase = choice.kind === 'rest' ? 'rest' : choice.kind === 'sanctuary' ? 'sanctuary' : 'prepare';
         this.tick = 0; this.spawned = 0; this.kills = 0; this.leaked = 0;
         this.nextSpawn = 1; this.enemies = []; this.projectiles = []; this.marks = []; this.vineWalls = [];
+        this.battleForms = Object.freeze([]);
         this.paused = false;
         // The MVP uses the same battlefield in every encounter: keep the squad and its slots.
         for (const pet of this.pets) { pet.cooldown = 0; pet.lastAttack = -10; pet.readyTick = 0; pet.attackCount = 0; }
@@ -238,7 +266,7 @@ export class MvpSession {
         if (this.dew < PETS[species].cost) return { ok: false, reason: 'INSUFFICIENT_DEW' };
         // Deduct only after every check. Each successful summon creates a distinct instance.
         this.dew -= PETS[species].cost;
-        const pet: PetState = { id: this.nextId++, species, slot, star: 1, mutation: null, attackCount: 0, purchaseCost: PETS[species].cost, cooldown: 0, lastAttack: -10, readyTick: this.tick };
+        const pet: PetState = { id: this.nextId++, species, slot, star: 1, mutations: Object.freeze([]), attackCount: 0, purchaseCost: PETS[species].cost, cooldown: 0, lastAttack: -10, readyTick: this.tick };
         this.pets.push(pet);
         return { ok: true, pet };
     }
@@ -331,23 +359,56 @@ export class MvpSession {
         const source = this.pets.find(p => p.id === sourceId); const target = this.pets.find(p => p.id === targetId);
         if (!source || !target) return { ok: false, reason: 'PET_NOT_FOUND' };
         const resumePhase = this.phase === 'battle' ? 'battle' : 'prepare';
+        const inherited = [...target.mutations, ...source.mutations];
         const pet: PetState = { ...target, star: target.star === 1 ? 2 : 3,
             purchaseCost: source.purchaseCost + target.purchaseCost,
-            mutation: target.mutation ?? source.mutation, attackCount: 0,
+            mutations: Object.freeze(inherited.filter((id, index) => inherited.indexOf(id) === index)), attackCount: target.attackCount,
             cooldown: Math.max(source.cooldown, target.cooldown), lastAttack: Math.max(source.lastAttack, target.lastAttack),
             readyTick: Math.max(source.readyTick, target.readyTick, this.phase === 'battle' ? this.tick + ECONOMY.relocationTicks : 0) };
         this.pets = this.pets.filter(p => p.id !== sourceId).map(p => p.id === targetId ? pet : p);
         // One independent draw after a valid commit; previews/invalid commands never draw.
+        const roll = this.drawMutation();
+        const mutationRequired = roll < this.mutationChance;
+        if (mutationRequired) {
+            // Conditional normalization keeps candidate pairs uniform even with a 50% trigger.
+            this.openMutation(pet, roll / this.mutationChance, 'merge', resumePhase);
+        }
+        return { ok: true, pet, mutationRequired };
+    }
+
+    metamorphosisError(id: number, replacementIndex = 0): ActionError | null {
+        if (this.phase !== 'prepare' || this.heart <= 0) return 'WRONG_PHASE';
+        if (this.paused) return 'PAUSED';
+        const pet = this.pets.find(p => p.id === id);
+        if (!pet) return 'PET_NOT_FOUND';
+        if (pet.star < 2) return 'STAR_TOO_LOW';
+        if (!Number.isInteger(replacementIndex) || replacementIndex < 0 || replacementIndex >= Math.max(1, pet.mutations.length)) return 'INVALID_MUTATION_INDEX';
+        if (!mutationChoices(pet.species, pet.mutations, 0).length) return 'NO_NEW_MUTATION';
+        if (this.mutationCredits <= 0) return 'NO_MUTATION_CREDIT';
+        return null;
+    }
+
+    beginMetamorphosis(id: number, replacementIndex = 0): PetActionResult {
+        const error = this.metamorphosisError(id, replacementIndex);
+        if (error) return { ok: false, reason: error };
+        const pet = this.pets.find(p => p.id === id);
+        if (!pet) return { ok: false, reason: 'PET_NOT_FOUND' };
+        this.creditsSpent++;
+        this.openMutation(pet, this.drawMutation(), 'metamorphosis', 'prepare', pet.mutations.length >= PET_GROWTH.mutationsByStar[pet.star - 1] ? replacementIndex : null);
+        return { ok: true, pet };
+    }
+
+    private drawMutation(): number {
         this.mutationState = (this.mutationState + 0x6D2B79F5) >>> 0;
         let n = Math.imul(this.mutationState ^ (this.mutationState >>> 15), 1 | this.mutationState);
         n ^= n + Math.imul(n ^ (n >>> 7), 61 | n);
-        const roll = ((n ^ (n >>> 14)) >>> 0) / 4294967296;
-        const mutationRequired = roll < this.mutationChance;
-        if (mutationRequired) {
-            this.pendingMutation = { petId: pet.id, choices: ['power', 'resonance'], resumePhase, pauseAfterChoice: false };
-            this.phase = 'mutation'; this.paused = true;
-        }
-        return { ok: true, pet, mutationRequired };
+        return ((n ^ (n >>> 14)) >>> 0) / 4294967296;
+    }
+
+    private openMutation(pet: PetState, roll: number, source: PendingMutation['source'], resumePhase: 'prepare' | 'battle', replacementIndex: number | null = null): void {
+        this.pendingMutation = { petId: pet.id, choices: mutationChoices(pet.species, pet.mutations, roll, replacementIndex),
+            source, replacementIndex, resumePhase, pauseAfterChoice: this.paused };
+        this.phase = 'mutation'; this.paused = true;
     }
 
     chooseMutation(choice: MutationId): boolean {
@@ -355,16 +416,18 @@ export class MvpSession {
         if (this.phase !== 'mutation' || !pending || !pending.choices.includes(choice)) return false;
         const pet = this.pets.find(p => p.id === pending.petId);
         if (!pet) return false;
-        pet.mutation = choice;
+        const mutations = mutationResult(pet.mutations, choice, pending.replacementIndex);
+        if (!isMutationForSpecies(pet.species, choice) || mutations.length > PET_GROWTH.mutationsByStar[pet.star - 1]) return false;
+        pet.mutations = mutations;
         this.phase = pending.resumePhase;
-        this.paused = pending.resumePhase === 'battle' && pending.pauseAfterChoice;
+        this.paused = pending.pauseAfterChoice;
         this.pendingMutation = null;
         return true;
     }
 
     setPaused(paused: boolean): boolean {
         if (this.phase === 'mutation' && this.pendingMutation && paused) { this.pendingMutation.pauseAfterChoice = true; return true; }
-        if (this.phase !== 'battle') return false;
+        if (this.phase !== 'battle' && this.phase !== 'prepare') return false;
         this.paused = paused;
         return true;
     }
@@ -381,16 +444,42 @@ export class MvpSession {
     }
 
     startBattle(): boolean {
-        if (this.phase !== 'prepare') return false;
+        if (this.phase !== 'prepare' || this.paused) return false;
         this.phase = 'battle';
         return true;
     }
 
     continueRoute(): boolean {
         if (this.phase !== 'won' || !this.current) return false;
+        if (this.current.kind === 'battle') this.completeBattle();
         this.visited.push(this.current.id);
         this.phase = this.current.children.length === 0 ? 'complete' : 'map';
         return true;
+    }
+
+    private completeBattle(): void {
+        const depth = this.current?.depth;
+        if (depth !== undefined && PET_GROWTH.metamorphosisRewardDepths.some(d => d === depth) && !this.rewardedDepths.includes(depth))
+            this.rewardedDepths = Object.freeze([...this.rewardedDepths, depth]);
+        this.usedForms = freezeForms([...this.usedForms, ...this.battleForms].filter((form, i, forms) =>
+            forms.findIndex(other => mutationKey(other) === mutationKey(form)) === i));
+    }
+
+    private recordAttack(pet: PetState): void {
+        const record = (actor: PetState): void => {
+            for (const mutation of actor.mutations) {
+                if (this.battleForms.some(form => form.species === actor.species && form.mutation === mutation)) continue;
+                this.battleForms = freezeForms([...this.battleForms, { species: actor.species, mutation }]);
+            }
+        };
+        record(pet);
+        if (pet.slot === null || PETS[pet.species].damage === 0) return;
+        const origin = SLOTS[pet.slot];
+        const activeDeer = this.pets.filter(p => p.species === 'deer' && p.slot !== null && this.tick >= p.readyTick
+            && distance(origin, SLOTS[p.slot]) <= this.petStats(p).range);
+        const strongest = activeDeer.reduce((best, p) => Math.max(best, this.petStats(p).boost), 0);
+        for (const deer of activeDeer)
+            if (this.petStats(deer).boost === strongest || deer.mutations.includes('resonance')) record(deer);
     }
 
     /** Only the strongest ready, deployed support applies; leaving its radius removes the bonus. */
@@ -406,17 +495,32 @@ export class MvpSession {
     }
 
     petStats(pet: PetState): PetStats {
-        const spec = PETS[pet.species]; const power = pet.mutation === 'power';
-        return { damage: spec.damage * PET_GROWTH.damageByStar[pet.star - 1] * (power ? PET_GROWTH.powerDamage : 1),
-            interval: pet.species === 'vine' ? PET_GROWTH.vineIntervalByStar[pet.star - 1]
-                * (power ? PET_GROWTH.vineLongInterval : pet.mutation === 'resonance' ? PET_GROWTH.vineQuickInterval : 1)
-                : spec.interval * (power ? PET_GROWTH.powerInterval : 1),
-            range: spec.range * (power && pet.species === 'deer' ? PET_GROWTH.powerAuraRange : 1),
-            boost: pet.species === 'deer' ? PET_GROWTH.deerBoostByStar[pet.star - 1] * (power ? PET_GROWTH.powerAura : 1) : 0 };
+        const spec = PETS[pet.species]; const power = pet.mutations.includes('power');
+        const resonance = pet.mutations.includes('resonance'); const adapted = pet.mutations.includes('adaptation');
+        const longarm = pet.species === 'cat' && pet.mutations.includes('longarm');
+        let damage = spec.damage * PET_GROWTH.damageByStar[pet.star - 1] * (power ? PET_GROWTH.powerDamage : 1);
+        let interval = spec.interval * (power ? PET_GROWTH.powerInterval : 1);
+        let range = spec.range; let boost = 0;
+        if (pet.species === 'cat') {
+            damage *= (resonance ? PET_GROWTH.clawBaseDamage : 1) * (longarm ? PET_GROWTH.longarmDamage : 1);
+            range *= longarm ? PET_GROWTH.longarmRange : 1;
+        }
+        if (pet.species === 'rabbit' && adapted) { damage *= PET_GROWTH.pursuitDamage; range *= PET_GROWTH.pursuitRange; }
+        if (pet.species === 'mushroom' && adapted) { damage *= PET_GROWTH.rapidSporeDamage; interval *= PET_GROWTH.rapidSporeInterval; }
+        if (pet.species === 'deer') {
+            boost = PET_GROWTH.deerBoostByStar[pet.star - 1] * (power ? PET_GROWTH.powerAura : 1) * (adapted ? PET_GROWTH.broadcastBoost : 1);
+            range *= (power ? PET_GROWTH.powerAuraRange : 1) * (adapted ? PET_GROWTH.broadcastRange : 1);
+        }
+        if (pet.species === 'vine') {
+            interval = PET_GROWTH.vineIntervalByStar[pet.star - 1] * (power ? PET_GROWTH.vineLongInterval : 1) * (resonance ? PET_GROWTH.vineQuickInterval : 1);
+            range *= adapted ? PET_GROWTH.farVineRange : 1;
+        }
+        if (pet.species === 'sparrow' && adapted) damage *= PET_GROWTH.longChainDamage;
+        return { damage, interval, range, boost };
     }
 
     attackRange(pet: PetState): number {
-        return this.petStats(pet).range * (pet.species === 'mushroom' && pet.mutation === 'resonance'
+        return this.petStats(pet).range * (pet.species === 'mushroom' && pet.mutations.includes('resonance')
             && (pet.attackCount + 1) % PET_GROWTH.resonanceEvery === 0 ? PET_GROWTH.sporeRange : 1);
     }
 
@@ -424,7 +528,7 @@ export class MvpSession {
         const interval = this.petStats(pet).interval;
         if (pet.slot === null) return interval;
         const origin = SLOTS[pet.slot];
-        const accelerated = this.pets.some(support => support.species === 'deer' && support.mutation === 'resonance'
+        const accelerated = this.pets.some(support => support.species === 'deer' && support.mutations.includes('resonance')
             && support.slot !== null && this.tick >= support.readyTick && support.id !== pet.id
             && distance(origin, SLOTS[support.slot]) <= this.petStats(support).range);
         return interval / (accelerated ? PET_GROWTH.auraSpeed : 1);
@@ -433,8 +537,9 @@ export class MvpSession {
     effectiveDamage(pet: PetState): number { return this.petStats(pet).damage * this.attackMultiplier(pet); }
 
     vineLifetime(pet: PetState): number {
-        return PET_GROWTH.vineLifetime * (pet.mutation === 'power' ? PET_GROWTH.vineLongLife
-            : pet.mutation === 'resonance' ? PET_GROWTH.vineQuickLife : 1);
+        return PET_GROWTH.vineLifetime * (pet.mutations.includes('power') ? PET_GROWTH.vineLongLife
+            : 1) * (pet.mutations.includes('resonance') ? PET_GROWTH.vineQuickLife : 1)
+            * (pet.mutations.includes('adaptation') ? PET_GROWTH.farVineLife : 1);
     }
 
     private damageEnemy(enemy: EnemyState, amount: number, source: 'direct' | 'spore'): void {
@@ -493,7 +598,7 @@ export class MvpSession {
                     this.marks.push({ from: { ...origin }, to: { x: enemy.x, y: enemy.y },
                         expires: time + 0.22, kind: 'mushroom' });
                 }
-                if (hit) { pet.attackCount++; pet.cooldown = this.attackInterval(pet); pet.lastAttack = time; }
+                if (hit) { this.recordAttack(pet); pet.attackCount++; pet.cooldown = this.attackInterval(pet); pet.lastAttack = time; }
                 continue;
             }
             let target: EnemyState | undefined;
@@ -505,8 +610,9 @@ export class MvpSession {
                     (enemy.distance === target.distance && enemy.id < target.id)) target = enemy;
             }
             if (!target) continue;
+            this.recordAttack(pet);
             pet.attackCount++;
-            const resonant = pet.mutation === 'resonance' && pet.attackCount % PET_GROWTH.resonanceEvery === 0;
+            const resonant = pet.mutations.includes('resonance') && pet.attackCount % PET_GROWTH.resonanceEvery === 0;
             pet.cooldown = this.attackInterval(pet); pet.lastAttack = time;
             if (pet.species === 'vine') {
                 const durationTicks = Math.round(this.vineLifetime(pet) / STEP);
@@ -515,6 +621,7 @@ export class MvpSession {
             } else if (pet.species === 'sparrow') {
                 const visited = new Set<number>(); let link: EnemyState | undefined = target;
                 let from: Point = origin;
+                const jumpRange = PET_GROWTH.chainRange * (pet.mutations.includes('adaptation') ? PET_GROWTH.longChainRange : 1);
                 const limit = PET_GROWTH.chainTargets + (resonant ? PET_GROWTH.chainExtraTargets : 0);
                 for (let hop = 0; hop < limit && link; hop++) {
                     visited.add(link.id);
@@ -523,7 +630,7 @@ export class MvpSession {
                     from = link;
                     let nearest: EnemyState | undefined;
                     for (const other of this.enemies) {
-                        if (visited.has(other.id) || other.hp <= 0 || distance(from, other) > PET_GROWTH.chainRange) continue;
+                        if (visited.has(other.id) || other.hp <= 0 || distance(from, other) > jumpRange) continue;
                         if (!nearest || distance(from, other) < distance(from, nearest)
                             || (distance(from, other) === distance(from, nearest) && other.id < nearest.id)) nearest = other;
                     }
@@ -531,8 +638,11 @@ export class MvpSession {
                 }
             } else if (pet.species === 'cat') {
                 this.damageEnemy(target, damage, 'direct');
-                if (resonant) for (const other of this.enemies) {
-                    if (other.id !== target.id && other.hp > 0 && distance(target, other) <= PET_GROWTH.clawRadius)
+                if (resonant) {
+                    const nearby = this.enemies.filter(other => other.id !== target.id && other.hp > 0
+                        && distance(target, other) <= PET_GROWTH.clawRadius)
+                        .sort((a, b) => distance(target, a) - distance(target, b) || a.id - b.id);
+                    for (const other of nearby.slice(0, PET_GROWTH.clawTargets))
                         this.damageEnemy(other, damage * PET_GROWTH.clawDamage, 'direct');
                 }
                 this.marks.push({ from: { ...origin }, to: { x: target.x, y: target.y }, expires: time + 0.18, kind: 'cat', radius: resonant ? PET_GROWTH.clawRadius : undefined });
@@ -566,7 +676,9 @@ export class MvpSession {
         this.enemies = this.enemies.filter(e => e.hp > 0);
         this.projectiles = this.projectiles.filter(p => p.targetId !== -1);
         this.marks = this.marks.filter(m => m.expires > time);
-        if (this.phase === 'battle' && this.spawned === encounter.count && this.enemies.length === 0) this.phase = 'won';
+        if (this.phase === 'battle' && this.spawned === encounter.count && this.enemies.length === 0) {
+            this.phase = 'won'; this.completeBattle();
+        }
     }
 }
 
@@ -577,7 +689,12 @@ function point(value: unknown): value is Point {
     return object(value) && number(value.x) && number(value.y) && Math.abs(value.x) < 100000 && Math.abs(value.y) < 100000;
 }
 function species(value: unknown): value is PetId { return typeof value === 'string' && PET_ORDER.some(id => id === value); }
-function mutation(value: unknown): value is MutationId | null { return value === null || value === 'power' || value === 'resonance'; }
+export function validMutationRecord(value: unknown): value is MutationRecord {
+    return object(value) && species(value.species) && isMutationForSpecies(value.species, value.mutation);
+}
+function freezeForms(forms: readonly MutationRecord[]): readonly MutationRecord[] {
+    return Object.freeze(forms.map(form => Object.freeze({ ...form })));
+}
 function array<T>(value: unknown, check: (item: unknown) => item is T, limit = 200): value is T[] {
     return Array.isArray(value) && value.length <= limit && value.every(check);
 }
@@ -585,7 +702,9 @@ function unique(values: readonly unknown[]): boolean { return new Set(values).si
 function petData(value: unknown): value is PetState {
     return object(value) && uint(value.id) && value.id > 0 && species(value.species)
         && (value.slot === null || uint(value.slot) && value.slot < SLOTS.length)
-        && (value.star === 1 || value.star === 2 || value.star === 3) && mutation(value.mutation)
+        && (value.star === 1 || value.star === 2 || value.star === 3)
+        && array(value.mutations, (id): id is MutationId => isMutationForSpecies(value.species as PetId, id), PET_GROWTH.mutationsByStar[value.star - 1])
+        && unique(value.mutations)
         && uint(value.attackCount) && value.purchaseCost === ECONOMY.summonCost * 2 ** (value.star - 1)
         && number(value.cooldown) && value.cooldown >= 0 && number(value.lastAttack) && uint(value.readyTick);
 }
@@ -612,19 +731,24 @@ function wallData(value: unknown): value is VineWall {
 }
 function validSnapshot(v: unknown): v is RunSnapshot {
     if (!object(v) || !uint(v.seed) || v.seed > 0xffffffff || !number(v.mutationChance) || v.mutationChance < 0 || v.mutationChance > 1
+        || typeof v.debugModified !== 'boolean'
         || !uint(v.mutationState) || v.mutationState > 0xffffffff || !uint(v.summonState) || v.summonState > 0xffffffff
         || !array(v.pocket, species, ECONOMY.carryLimit) || !v.pocket.length || !unique(v.pocket)
         || !v.pocket.some(id => PETS[id].damage > 0) || !array(v.banished, species, PET_ORDER.length) || !unique(v.banished)
         || typeof v.phase !== 'string' || !['map', 'rest', 'sanctuary', 'prepare', 'battle', 'mutation', 'won', 'lost', 'complete'].includes(v.phase)
         || !uint(v.heart) || v.heart > ECONOMY.maxHeart || !uint(v.dew) || typeof v.paused !== 'boolean'
         || !uint(v.tick) || !uint(v.kills) || !uint(v.leaked) || !uint(v.spawned)
+        || !array(v.mutationRewardDepths, uint, 2) || !unique(v.mutationRewardDepths)
+        || !uint(v.mutationCreditsSpent) || v.mutationCreditsSpent > v.mutationRewardDepths.length
+        || !array(v.usedMutations, validMutationRecord, MUTATION_FORM_COUNT) || !unique(v.usedMutations.map(mutationKey))
+        || !array(v.battleMutations, validMutationRecord, MUTATION_FORM_COUNT) || !unique(v.battleMutations.map(mutationKey))
         || !array(v.visited, (item): item is string => typeof item === 'string', ROUTE_DEPTHS) || !unique(v.visited)
         || !(v.currentId === null || typeof v.currentId === 'string')
         || !array(v.unlockedSlots, uint, SLOTS.length) || !unique(v.unlockedSlots) || v.unlockedSlots.some(i => i >= SLOTS.length)
         || !array(v.pets, petData, SLOTS.length) || !array(v.enemies, enemyData, 30)
         || !array(v.projectiles, projectileData, 200) || !array(v.marks, markData, 300) || !array(v.vineWalls, wallData, 40)
         || !uint(v.nextId) || v.nextId === 0 || !number(v.nextSpawn) || v.nextSpawn < 0) return false;
-    const { pocket, banished, unlockedSlots, nextId } = v;
+    const { pocket, banished, unlockedSlots, nextId, visited, mutationRewardDepths } = v;
     if (banished.some(id => pocket.includes(id)) || SLOTS.some((_, i) => !LOCKED_SLOTS.includes(i) && !unlockedSlots.includes(i))) return false;
     const slots = v.pets.map(pet => pet.slot).filter((slot): slot is number => slot !== null);
     const ids = [...v.pets, ...v.enemies, ...v.projectiles, ...v.vineWalls].map(entity => entity.id);
@@ -636,6 +760,10 @@ function validSnapshot(v: unknown): v is RunSnapshot {
         last = node;
     }
     const current = route.find(n => n.id === v.currentId);
+    if (mutationRewardDepths.some(depth => !PET_GROWTH.metamorphosisRewardDepths.some(d => d === depth)
+        || !visited.some(id => route.find(n => n.id === id)?.depth === depth) && !(v.phase === 'won' && current?.depth === depth))
+        || PET_GROWTH.metamorphosisRewardDepths.some(depth => visited.some(id => route.find(n => n.id === id)?.depth === depth)
+            && !mutationRewardDepths.includes(depth))) return false;
     if (v.phase === 'map' || v.phase === 'complete') {
         if (v.currentId !== (last?.id ?? null) || (v.phase === 'complete') !== (v.visited.length === ROUTE_DEPTHS)) return false;
     } else if (!current || current.depth !== v.visited.length || last && !last.children.includes(current.id)) return false;
@@ -644,8 +772,20 @@ function validSnapshot(v: unknown): v is RunSnapshot {
     if (['prepare', 'battle', 'mutation', 'lost'].includes(v.phase) && current?.kind !== 'battle') return false;
     if (v.phase === 'mutation') {
         const pending = v.pendingMutation;
-        if (!object(pending) || !uint(pending.petId) || !v.pets.some(p => p.id === pending.petId && p.star > 1)
-            || !Array.isArray(pending.choices) || JSON.stringify(pending.choices) !== '["power","resonance"]'
+        if (!object(pending) || !uint(pending.petId)) return false;
+        if (!(pending.replacementIndex === null || uint(pending.replacementIndex))) return false;
+        const replacementIndex = typeof pending.replacementIndex === 'number' ? pending.replacementIndex : null;
+        const target = v.pets.find(p => p.id === pending.petId && p.star > 1);
+        if (!target || !Array.isArray(pending.choices) || pending.choices.length < 1 || pending.choices.length > 2 || !unique(pending.choices)
+            || !pending.choices.every(id => isMutationForSpecies(target.species, id))
+            || !(replacementIndex === null || uint(replacementIndex) && replacementIndex < target.mutations.length)
+            || replacementIndex === null && (target.mutations.length >= PET_GROWTH.mutationsByStar[target.star - 1]
+                || pending.choices.some(id => target.mutations.includes(id)))
+            || replacementIndex !== null && (!pending.choices.includes(target.mutations[replacementIndex])
+                || pending.choices.some(id => id !== target.mutations[replacementIndex] && target.mutations.includes(id)))
+            || pending.source === 'merge' && replacementIndex !== null
+            || !['merge', 'metamorphosis'].includes(String(pending.source))
+            || pending.source === 'metamorphosis' && (pending.resumePhase !== 'prepare' || v.mutationCreditsSpent === 0)
             || !['prepare', 'battle'].includes(String(pending.resumePhase)) || typeof pending.pauseAfterChoice !== 'boolean' || !v.paused) return false;
     } else if (v.pendingMutation !== null) return false;
     return true;

@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { MvpSession, PET_ORDER, PetId, PetState, EnemyState, pointOnPath, STEP } from '../assets/scripts/domain/MvpSession.ts';
 import { PET_GROWTH, mutationCards, MutationId } from '../assets/scripts/domain/PetGrowth.ts';
 
-function prepare(chance = 0, seed = 123): MvpSession {
+function prepare(chance = 0, seed = 3): MvpSession {
     const g = new MvpSession(seed, { mutationChance: chance, carriedPets: PET_ORDER }); g.chooseNode(g.available[0].id); g.dew = 1000; return g;
 }
 function summon(g: MvpSession, species: PetId, slot: number): PetState {
@@ -24,7 +24,7 @@ function ticks(g: MvpSession, n: number): void { for (let i = 0; i < n; i++) g.s
 
 test('new pets start at one star; free merge consumes two and keeps target ID, position and total investment', () => {
     const g = prepare(); const a = summon(g, 'cat', 0); const b = summon(g, 'cat', 4); const dew = g.dew;
-    expect(a.star).toBe(1); expect(a.mutation).toBeNull();
+    expect(a.star).toBe(1); expect(a.mutations).toEqual([]);
     g.movePet(a.id, 0); // A reserve material may merge into a deployed target.
     const r = g.mergePets(a.id, b.id); if (!r.ok) throw new Error('Missing result');
     expect(g.pets).toHaveLength(1); expect(r.pet.id).toBe(b.id); expect(r.pet.slot).toBe(4);
@@ -72,16 +72,16 @@ test('mutation offers exactly two stable cards, locks the simulation and transac
     expect(g.mergePets(a.id, b.id).ok).toBe(false); expect(g.summonPet('cat', 0).ok).toBe(false);
     expect(g.setPaused(false)).toBe(false); expect(g.continueRoute()).toBe(false);
     expect(g.chooseMutation('power')).toBe(true); expect(g.phase).toBe('battle'); expect(g.paused).toBe(false);
-    expect(g.chooseMutation('resonance')).toBe(false); expect(r.pet.mutation).toBe('power');
+    expect(g.chooseMutation('resonance')).toBe(false); expect(r.pet.mutations).toEqual(['power']);
     expect(g.mutationRngState).toBe(state);
 });
 
-test('background pause survives a pending choice and inherited mutations are replaced rather than stacked', () => {
+test('background pause survives a pending choice while inherited mutations are retained and a third is added', () => {
     const g = prepare(1); const a = evolve(g, 'cat', 'power'); const b = evolve(g, 'cat', 'resonance', 4);
     g.startBattle(); const r = g.mergePets(a.id, b.id); if (!r.ok) throw new Error('Missing merge');
-    expect(r.pet.star).toBe(3); expect(r.pet.mutation).toBe('resonance');
-    expect(g.setPaused(true)).toBe(true); expect(g.chooseMutation('power')).toBe(true);
-    expect(g.paused).toBe(true); expect(g.petStats(r.pet).damage).toBeCloseTo(182.4);
+    expect(r.pet.star).toBe(3); expect(r.pet.mutations).toEqual(['resonance', 'power']);
+    expect(g.setPaused(true)).toBe(true); expect(g.chooseMutation('longarm')).toBe(true);
+    expect(g.paused).toBe(true); expect(g.petStats(r.pet).damage).toBeCloseTo(91.2 * 2 * 0.85 * 0.75);
     expect(r.pet.purchaseCost).toBe(120); expect(g.pets).toHaveLength(1);
     g.setPaused(false); const before = g.tick; g.step(); expect(g.tick).toBe(before + 1);
 });
@@ -110,8 +110,8 @@ test('resonant cat splashes other nearby enemies only on each third real attack'
     const g = prepare(1); const pet = evolve(g, 'cat', 'resonance');
     const other = enemy(1000, 210); const target = enemy(1001, 260); battle(g, [other, target]);
     ticks(g, 21); expect(pet.attackCount).toBe(2); expect(other.hp).toBe(1000);
-    ticks(g, 20); expect(pet.attackCount).toBe(3); expect(other.hp).toBeCloseTo(977.2);
-    expect(target.hp).toBeCloseTo(1000 - 45.6 * 3); expect(g.marks.some(m => m.radius === 90)).toBe(true);
+    ticks(g, 20); expect(pet.attackCount).toBe(3); expect(other.hp).toBeCloseTo(1000 - 45.6 * 0.85 * 0.6);
+    expect(target.hp).toBeCloseTo(1000 - 45.6 * 0.85 * 3); expect(g.marks.some(m => m.radius === 90)).toBe(true);
 });
 
 test('resonant rabbit fires an additional snapshotted bolt at a different target, or the same lone target', () => {
@@ -141,7 +141,7 @@ test('deer power trades radius for aura strength, while resonance speeds allies 
     const resonance = prepare(1); evolve(resonance, 'deer', 'resonance', 5);
     const cat = summon(resonance, 'cat', 0);
     expect(resonance.effectiveDamage(cat)).toBeCloseTo(38.4); expect(resonance.attackInterval(cat)).toBeCloseTo(0.65 / 1.2);
-    const second = summon(resonance, 'deer', 4); second.mutation = 'resonance';
+    const second = summon(resonance, 'deer', 4); second.mutations = ['resonance'];
     expect(resonance.attackInterval(cat)).toBeCloseTo(0.65 / 1.2);
 });
 
@@ -149,7 +149,7 @@ test('star, mutation, invested cost and placement persist across nodes and pendi
     const g = prepare(1); const a = summon(g, 'cat', 0); const b = summon(g, 'cat', 4);
     g.mergePets(a.id, b.id); expect(g.chooseNode(g.route[1].id)).toBe(false);
     g.chooseMutation('resonance'); g.pets[0].attackCount = 2; g.phase = 'won'; g.continueRoute(); g.chooseNode(g.available[0].id);
-    expect(g.pets[0]).toMatchObject({ id: b.id, star: 2, mutation: 'resonance', purchaseCost: 60, slot: 4, attackCount: 0 });
+    expect(g.pets[0]).toMatchObject({ id: b.id, star: 2, mutations: ['resonance'], purchaseCost: 60, slot: 4, attackCount: 0 });
     const before = g.tick; g.step(); expect(g.tick).toBe(before); // Rest/prepare never simulate.
-    expect(STEP).toBe(1 / 30); expect(mutationCards('cat').map(c => c.id)).toEqual(['power', 'resonance']);
+    expect(STEP).toBe(1 / 30); expect(mutationCards('cat').map(c => c.id)).toEqual(['power', 'resonance', 'longarm']);
 });

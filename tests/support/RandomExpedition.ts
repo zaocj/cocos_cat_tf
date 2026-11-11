@@ -3,7 +3,7 @@ import { MvpSession, PetId, PetState, STEP, ECONOMY, SLOTS, distance } from '../
 export type Build = 'focused' | 'spores' | 'lightning';
 export interface CampaignResult {
     seed: number; build: Build; route: 'rest' | 'shop'; won: boolean; depth: number; heart: number;
-    dew: number; purchases: PetId[]; banished: PetId[]; summons: number; merges: number; leaks: number; drawn: Partial<Record<PetId, number>>;
+    dew: number; purchases: PetId[]; banished: PetId[]; summons: number; merges: number; metamorphoses: number; leaks: number; drawn: Partial<Record<PetId, number>>;
 }
 const POSITIONS: Record<PetId, readonly number[]> = {
     cat: [0, 6, 8, 9, 4, 2, 13, 5], rabbit: [4, 6, 9, 0, 8, 2, 13, 5],
@@ -12,10 +12,10 @@ const POSITIONS: Record<PetId, readonly number[]> = {
 };
 
 /** All actions are player-facing commands. No funds, pet types, stars or RNG state are injected. */
-export function playRandomExpedition(seed: number, build: Build, route: 'rest' | 'shop', mutationChance = 0.5, restoreAtNodes = false): CampaignResult {
+export function playRandomExpedition(seed: number, build: Build, route: 'rest' | 'shop', mutationChance = 0.5, restoreAtNodes = false, useMetamorphosis = false): CampaignResult {
     let game = new MvpSession(seed, { mutationChance });
     const report: CampaignResult = { seed, build, route, won: false, depth: 0, heart: 3, dew: 60,
-        purchases: [], banished: [], summons: 0, merges: 0, leaks: 0, drawn: {} };
+        purchases: [], banished: [], summons: 0, merges: 0, metamorphoses: 0, leaks: 0, drawn: {} };
     const arrange = (): void => {
         const pets = [...game.pets].sort((a, b) => (a.species === 'deer' ? -1 : 0) - (b.species === 'deer' ? -1 : 0)
             || b.star - a.star || a.id - b.id);
@@ -28,7 +28,8 @@ export function playRandomExpedition(seed: number, build: Build, route: 'rest' |
     const settleMutation = (): void => {
         if (!game.pendingMutation) return;
         const pet = game.pets.find(p => p.id === game.pendingMutation?.petId);
-        game.chooseMutation(pet?.species === 'deer' || pet?.species === 'rabbit' || pet?.species === 'sparrow' ? 'resonance' : 'power');
+        const preferred = pet?.species === 'deer' || pet?.species === 'rabbit' || pet?.species === 'sparrow' ? 'resonance' : 'power';
+        game.chooseMutation(game.pendingMutation.choices.includes(preferred) ? preferred : game.pendingMutation.choices[0]);
     };
     const shoppingList: PetId[] = build === 'spores' ? ['mushroom', 'deer'] : build === 'lightning' ? ['sparrow', 'vine'] : [];
     const develop = (): void => {
@@ -84,7 +85,17 @@ export function playRandomExpedition(seed: number, build: Build, route: 'rest' |
             if (build === 'focused' && game.dew >= 50 && game.banishPocketPet('cat').ok) report.banished.push('cat');
             game.leaveSanctuary(); if (restoreAtNodes) game = MvpSession.restore(game.snapshot()); continue;
         }
-        develop(); arrange(); game.startBattle();
+        develop(); arrange();
+        if (useMetamorphosis) for (let attempt = 0; attempt < 2 && game.mutationCredits > 0; attempt++) {
+            const priorities: PetId[] = build === 'spores' ? ['mushroom', 'deer', 'cat', 'rabbit']
+                : build === 'lightning' ? ['sparrow', 'vine', 'cat', 'rabbit'] : ['cat', 'rabbit'];
+            const target = [...game.pets].filter(pet => game.metamorphosisError(pet.id) === null)
+                .sort((a, b) => priorities.indexOf(a.species) - priorities.indexOf(b.species) || b.star - a.star || a.id - b.id)[0];
+            if (!target || !game.beginMetamorphosis(target.id).ok) break;
+            report.metamorphoses++; if (restoreAtNodes) game = MvpSession.restore(game.snapshot());
+            settleMutation();
+        }
+        game.startBattle();
         for (let tick = 0; tick < 180 / STEP && game.phase === 'battle'; tick++) {
             if (tick % 30 === 0) develop();
             game.step();

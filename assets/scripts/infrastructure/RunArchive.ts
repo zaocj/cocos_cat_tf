@@ -1,8 +1,9 @@
-import { MvpSession, RunSnapshot } from '../domain/MvpSession';
+import { MvpSession, RunSnapshot, validMutationRecord } from '../domain/MvpSession';
 import { GUIDE_IDS, PlayerProfile } from '../domain/FirstGuide';
+import { mutationKey, MUTATION_FORM_COUNT } from '../domain/PetGrowth';
 
 export const SAVE_SCHEMA = 1;
-export const CONTENT_VERSION = 'mvp-2026-11-07-2';
+export const CONTENT_VERSION = 'mvp-2026-11-11-mutation-stack-1';
 export const SAVE_KEYS = { primary: 'cute-mutation.archive.v1', backup: 'cute-mutation.archive.v1.backup' } as const;
 export interface StoragePort { getItem(key: string): string | null; setItem(key: string, value: string): void }
 export interface ArchiveBody { run: RunSnapshot | null; profile: PlayerProfile }
@@ -33,9 +34,21 @@ function decode(raw: string): Decoded {
             || !(body.profile.speed === undefined || body.profile.speed === 1 || body.profile.speed === 2)
             || new Set(body.profile.guideSeen).size !== body.profile.guideSeen.length)
             return { ok: false, incompatible: false };
+        const collection: unknown = body.profile.mutationCollection;
+        const last: unknown = body.profile.lastExpedition;
+        const formsValid = (value: unknown): boolean => Array.isArray(value) && value.length <= MUTATION_FORM_COUNT
+            && value.every(validMutationRecord) && new Set(value.map(mutationKey)).size === value.length;
+        if (collection !== undefined && !formsValid(collection)) return { ok: false, incompatible: false };
+        if (last !== undefined && (!record(last) || !Number.isSafeInteger(last.seed) || typeof last.seed !== 'number'
+            || last.seed < 0 || last.seed > 0xffffffff || !['won', 'lost'].includes(String(last.outcome))
+            || !Number.isSafeInteger(last.nodes) || typeof last.nodes !== 'number' || last.nodes < 0 || last.nodes > 12
+            || typeof last.debugModified !== 'boolean'
+            || last.outcome === 'won' && last.nodes !== 12 || !formsValid(last.forms))) return { ok: false, incompatible: false };
         const run = body.run === null ? null : MvpSession.restore(body.run).snapshot();
-        const data: ArchiveBody = { run, profile: { guideSeen: body.profile.guideSeen,
-            ...(body.profile.speed === 1 || body.profile.speed === 2 ? { speed: body.profile.speed } : {}) } };
+        // Shape is checked above; copy only the known profile fields, never arbitrary envelope properties.
+        const profile = JSON.parse(JSON.stringify({ guideSeen: body.profile.guideSeen, speed: body.profile.speed,
+            mutationCollection: collection, lastExpedition: last })) as PlayerProfile;
+        const data: ArchiveBody = { run, profile };
         return { ok: true, envelope: { schema: SAVE_SCHEMA, content: CONTENT_VERSION, revision: envelope.revision,
             body: envelope.body, checksum: checksum(envelope.body) }, data };
     } catch { return { ok: false, incompatible: false }; }

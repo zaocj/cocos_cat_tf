@@ -3,7 +3,7 @@ import { MvpSession, PET_ORDER, PetId, PetState, EnemyState, STEP, pointOnPath }
 import { mutationCards } from '../assets/scripts/domain/PetGrowth.ts';
 
 function prepare(species: PetId, mutation?: 'power' | 'resonance'): { game: MvpSession; pet: PetState } {
-    const game = new MvpSession(123, { carriedPets: PET_ORDER, mutationChance: 1 });
+    const game = new MvpSession(3, { carriedPets: PET_ORDER, mutationChance: 1 });
     game.chooseNode(game.available[0].id); game.dew = 1000;
     const r = game.summonPet(species, 0); if (!r.ok) throw new Error('Missing pet');
     if (mutation) {
@@ -72,7 +72,7 @@ test('vine mutations trade lifetime against interval and their actual cast durat
         expect(game.vineWalls[0].durationTicks).toBe(mutation === 'power' ? 120 : 45);
         ticks(game, mutation === 'power' ? 120 : 45); expect(game.vineWalls).toHaveLength(1);
         game.step(); expect(game.vineWalls).toHaveLength(0);
-        expect(mutationCards('vine')).toHaveLength(2);
+        expect(mutationCards('vine')).toHaveLength(3);
     }
 });
 

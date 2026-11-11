@@ -11,11 +11,11 @@ function squad() {
 
 test('dropping different species swaps their slots without changing investments, traits, stars or random streams', () => {
     const { game, cat, rabbit } = squad();
-    cat.star = 3; cat.mutation = 'power'; rabbit.mutation = 'resonance';
+    cat.star = 3; cat.mutations = ['power']; rabbit.mutations = ['resonance'];
     const before = [game.dew, game.mutationRngState, game.summonRngState];
     expect(game.dropPet(cat.id, 2)).toEqual({ ok: true, pet: cat });
     expect(cat.slot).toBe(2); expect(rabbit.slot).toBe(0); expect(game.pets).toHaveLength(2);
-    expect(cat.star).toBe(3); expect(cat.mutation).toBe('power'); expect(rabbit.mutation).toBe('resonance');
+    expect(cat.star).toBe(3); expect(cat.mutations).toEqual(['power']); expect(rabbit.mutations).toEqual(['resonance']);
     expect(cat.purchaseCost).toBe(30); expect(rabbit.purchaseCost).toBe(30);
     expect([game.dew, game.mutationRngState, game.summonRngState]).toEqual(before);
     expect(game.pendingMutation).toBeNull();

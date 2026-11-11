@@ -1,5 +1,5 @@
 import {
-    _decorator, BlockInputEvents, Color, Component, EventKeyboard, EventTouch, game, Game, Graphics, input, Input,
+    _decorator, BlockInputEvents, Color, Component, EditBox, EventKeyboard, EventTouch, game, Game, Graphics, input, Input,
     KeyCode, Label, Layers, Mask, Node, profiler, ResolutionPolicy, screen, sys, UITransform, Vec3, view,
 } from 'cc';
 import { ActionError, ECONOMY, MvpSession, PATH, PETS, PET_ORDER, PetActionResult, MergeResult, PocketResult, PetId, SLOTS, STEP, EnemyState, RestChoice, pointOnPath } from '../domain/MvpSession';
@@ -7,19 +7,21 @@ import { isPortrait, PortraitLayout, portraitLayout, portraitSlotAt, PORTRAIT_MI
 
 import { GameToast } from './GameToast';
 import { ENEMIES, ENEMY_BALANCE } from '../domain/EnemyConfig';
-import { PET_GROWTH, MutationId, mutationCards } from '../domain/PetGrowth';
+import { PET_GROWTH, MutationId, mutationCards, mutationResult, mutationNames, MUTATION_FORM_COUNT } from '../domain/PetGrowth';
 import { ROUTE_BOUNDS } from '../domain/ExpeditionRoute';
 import { RouteMapViewport } from './RouteMapViewport';
 import { RouteMapView } from './RouteMapView';
 import { ArchiveLoad, RunArchive } from '../infrastructure/RunArchive';
-import { GuideId, GUIDE_IDS, GUIDES, nextGuide, PlayerProfile } from '../domain/FirstGuide';
+import { GuideId, GUIDE_IDS, GUIDES, nextGuide, PlayerProfile, recordMutationProgress } from '../domain/FirstGuide';
 
 const { ccclass } = _decorator;
-type Selection = { kind: 'carried'; species: PetId } | { kind: 'pet'; id: number } | { kind: 'release' } | { kind: 'cultivate' };
+type Selection = { kind: 'none' } | { kind: 'carried'; species: PetId } | { kind: 'pet'; id: number } | { kind: 'release' } | { kind: 'cultivate' };
 interface SummonDrag {
     touchId: number; species: PetId;
     start: { x: number; y: number }; point: { x: number; y: number }; moved: boolean;
     selection: Selection | null; originSlot: number | null; elapsed: number; active: boolean; startedAt: number;
+    releaseOnTap: boolean;
+    toggleToolOnTap: boolean;
 }
 const C = {
     bg: '#EDF3E7', ink: '#234235', muted: '#526A58', green: '#337354', pale: '#D9E6D0',
@@ -54,7 +56,12 @@ export class MvpGame extends Component {
     private profile: PlayerProfile = { guideSeen: [] };
     private atHome = true;
     private menuOpen = false;
+    private debugOpen = false;
+    private metamorphosisLayer = 0;
     private confirmNew = false;
+    private collectionOpen = false;
+    private metamorphosisOpen = false;
+    private metamorphosisTarget: number | null = null;
     private sessionOnly = false;
     private saveProblem = '';
     private lastSavedTick = 0;
@@ -107,6 +114,8 @@ export class MvpGame extends Component {
         if (this.screenRoot) this.onViewportResize();
     }
     onDisable(): void {
+        this.clearToolSelection();
+        this.metamorphosisOpen = false; this.metamorphosisTarget = null;
         this.infoOpen = false;
         this.mergeSourceId = null;
         this.toast?.dismiss();
@@ -159,6 +168,8 @@ export class MvpGame extends Component {
         this.updateHud();
     }
     private onHide(): void {
+        this.clearToolSelection();
+        this.metamorphosisOpen = false; this.metamorphosisTarget = null;
         this.infoOpen = false;
         this.mergeSourceId = null;
         this.toast?.dismiss();
@@ -169,7 +180,7 @@ export class MvpGame extends Component {
     }
     private pageHide = (): void => { this.onHide(); };
     private onKey(event: EventKeyboard): void {
-        if (this.atHome || this.menuOpen || this.guideActive || this.saveProblem || this.orientationBlocked || this.reservesOpen || this.summonDrag) return;
+        if (this.atHome || this.menuOpen || this.collectionOpen || this.metamorphosisOpen || this.guideActive || this.saveProblem || this.orientationBlocked || this.reservesOpen || this.summonDrag) return;
         if (event.keyCode === KeyCode.DIGIT_1) this.selectPet('cat');
         if (event.keyCode === KeyCode.DIGIT_2) this.selectPet('rabbit');
         if (event.keyCode === KeyCode.DIGIT_3) this.selectPet('deer');
@@ -180,7 +191,7 @@ export class MvpGame extends Component {
         if (event.keyCode === KeyCode.KEY_R) this.randomSummon();
         if (event.keyCode === KeyCode.SPACE) {
             if (this.session.phase === 'prepare') this.begin();
-            else if (this.session.phase === 'battle') this.togglePause();
+            else if (this.session.phase === 'battle') this.openMenu();
         }
     }
     private selectPet(id: PetId): void {
@@ -189,12 +200,13 @@ export class MvpGame extends Component {
         this.inspectedEnemyId = null;
         if (this.session.phase !== 'prepare' && this.session.phase !== 'battle') return;
         this.inspectedPetId = null;
-        this.selected = { kind: 'carried', species: id }; this.infoOpen = true; this.clearFeedback(); this.renderScreen();
+        this.selected = { kind: 'none' }; this.infoOpen = false; this.clearFeedback(); this.renderScreen();
     }
     private selectShovel(): void {
         if (this.session.phase !== 'prepare' && this.session.phase !== 'battle') return;
         this.mergeSourceId = null; this.inspectedEnemyId = null; this.inspectedPetId = null;
-        this.selected = { kind: 'cultivate' }; this.infoOpen = true; this.clearFeedback(); this.renderScreen();
+        this.selected = { kind: this.selected.kind === 'cultivate' ? 'none' : 'cultivate' };
+        this.infoOpen = false; this.clearFeedback(); this.renderScreen();
     }
 
     private randomSummon(): void {
@@ -213,13 +225,9 @@ export class MvpGame extends Component {
         this.inspectedPetId = null;
         if (this.session.startBattle()) { this.accumulator = 0; this.clearFeedback(); this.renderScreen(); }
     }
-    private togglePause(): void {
-        this.infoOpen = false;
-        this.mergeSourceId = null;
-        this.inspectedPetId = null;
-        this.session.setPaused(!this.session.paused); this.accumulator = 0; this.clearFeedback(); this.renderScreen();
-    }
     private restart(): void {
+        this.debugOpen = false;
+        this.collectionOpen = false; this.metamorphosisOpen = false; this.metamorphosisTarget = null;
         this.atHome = false; this.menuOpen = false; this.confirmNew = false; this.guideActive = null;
         this.banishCandidate = null;
         this.infoOpen = false;
@@ -231,7 +239,9 @@ export class MvpGame extends Component {
     }
 
     private checkpoint(): boolean {
-        if (this.atHome || this.sessionOnly || !this.archive) return true;
+        if (this.atHome) return true;
+        this.profile = recordMutationProgress(this.profile, this.session);
+        if (this.sessionOnly || !this.archive) return true;
         const result = this.archive.save(this.session, this.profile);
         if (result.ok === false) {
             this.saveProblem = result.message; this.session.setPaused(true); this.accumulator = 0; return false;
@@ -283,8 +293,11 @@ export class MvpGame extends Component {
             if (resumable || ['corrupt', 'incompatible', 'unavailable'].includes(this.saved.status)) { this.confirmNew = true; this.renderScreen(); }
             else this.restart();
         }, C.pale, C.ink);
+        this.button(root, `形态记录 · ${this.profile.mutationCollection?.length ?? 0}/${MUTATION_FORM_COUNT}`, 0, -278, 580, 76,
+            () => { this.collectionOpen = true; this.renderScreen(); }, C.pale, C.ink, true, 24);
         this.text(root, this.saved.message || (run?.phase === 'complete' ? '上一次远征已完成，开始新的旅途吧。' : '自动保存本局进度；新远征会重置口袋与灵露。'),
-            0, -300, 23, 610, this.saved.message ? C.orange : C.muted, false, false, 140);
+            0, -397, 23, 610, this.saved.message ? C.orange : C.muted, false, false, 140);
+        if (this.collectionOpen) this.collectionOverlay(root);
         if (this.confirmNew) {
             const modal = this.panel(root, 'ConfirmNewRun', 420);
             this.text(modal, '开始新远征？', 0, 122, 34, 600, C.ink, false, true, 70);
@@ -295,16 +308,65 @@ export class MvpGame extends Component {
     }
 
     private drawRunMenu(root: Node): void {
-        const modal = this.panel(root, 'RunMenu', 640);
-        this.text(modal, '远征菜单', 0, 242, 36, 600, C.ink, false, true);
-        this.text(modal, this.sessionOnly ? '本次不保存 · 关闭后进度会丢失' : '进度自动保存，战斗已暂停', 0, 172, 23, 600, this.sessionOnly ? C.orange : C.muted);
-        this.button(modal, '继续远征', 0, 62, 560, 88, () => {
+        const modal = this.panel(root, 'RunMenu', 780);
+        this.text(modal, '远征菜单', 0, 303, 36, 600, C.ink, false, true);
+        this.text(modal, this.sessionOnly ? '本次不保存 · 关闭后进度会丢失' : this.session.debugModified ? '本局已使用修改器 · 进度自动保存' : '进度自动保存，战斗已暂停', 0, 232, 23, 600, this.sessionOnly ? C.orange : C.muted);
+        this.button(modal, '继续远征', 0, 119, 560, 88, () => {
             this.menuOpen = false; this.session.setPaused(false); this.accumulator = 0; this.renderScreen();
         });
-        this.button(modal, this.sessionOnly ? '返回首页（仅本次保留）' : '保存并返回首页', 0, -60, 560, 88, () => this.home(), C.pale, C.ink, true, 24);
-        this.button(modal, '重新显示首次引导', 0, -182, 560, 88, () => {
+        this.button(modal, this.sessionOnly ? '返回首页（仅本次保留）' : '保存并返回首页', 0, 0, 560, 88, () => this.home(), C.pale, C.ink, true, 24);
+        this.button(modal, '调试修改器', 0, -119, 560, 88, () => { this.debugOpen = true; this.renderScreen(); }, C.pale, C.spore, true, 25);
+        this.button(modal, '重新显示首次引导', 0, -238, 560, 88, () => {
             this.profile = { ...this.profile, guideSeen: [] }; this.menuOpen = false; this.renderScreen();
         }, C.pale, C.ink, true, 24);
+    }
+
+    private debugInput(parent: Node, name: string, value: string, y: number): EditBox {
+        const node = this.uiNode(name, parent, 0, y, 560, 80);
+        // Configure labels before EditBox.__preload can create its default children.
+        node.active = false;
+        const art = node.addComponent(Graphics); this.rect(art, 0, 0, 560, 80, C.pale, 12);
+        const label = this.text(node, value, 0, 0, 28, 528, C.ink, false, true, 66);
+        const placeholder = this.text(node, '', 0, 0, 25, 528, C.muted, false, false, 66);
+        label.getComponent(UITransform)?.setAnchorPoint(0, 1);
+        placeholder.getComponent(UITransform)?.setAnchorPoint(0, 1);
+        const edit = node.addComponent(EditBox); edit.textLabel = label; edit.placeholderLabel = placeholder;
+        edit.inputMode = EditBox.InputMode.DECIMAL; edit.returnType = EditBox.KeyboardReturnType.DONE;
+        label.verticalAlign = Label.VerticalAlign.CENTER;
+        edit.maxLength = 10; edit.string = value;
+        node.active = true;
+        return edit;
+    }
+
+    private drawDebugModifier(root: Node): void {
+        const modal = this.panel(root, 'DebugModifier', 860);
+        this.text(modal, '调试修改器', 0, 354, 36, 600, C.spore, false, true, 70);
+        this.text(modal, '仅修改当前远征，确认后保存；新远征恢复默认。', 0, 278, 23, 592, C.muted, false, false, 70);
+        this.text(modal, '灵露 · 0～1000000 整数', 0, 210, 24, 560, C.ink, true, true, 42);
+        const dew = this.debugInput(modal, 'DebugDewInput', `${this.session.dew}`, 143);
+        ['0', '+100', '+1000', '10000'].forEach((title, i) => this.button(modal, title, -210 + i * 140, 62, 130, 56, () => {
+            dew.string = title.startsWith('+') ? `${Math.min(1000000, (Number(dew.string) || 0) + Number(title.slice(1)))}` : title;
+        }, C.pale, C.ink, true, 23));
+        this.text(modal, '自然变异概率 · 0～100%', 0, -21, 24, 560, C.ink, true, true, 42);
+        const chance = this.debugInput(modal, 'DebugChanceInput', `${Number((this.session.mutationChance * 100).toFixed(4))}`, -86);
+        [0, 50, 100].forEach((value, i) => this.button(modal, `${value}%`, -184 + i * 184, -168, 172, 56,
+            () => { chance.string = `${value}`; }, C.pale, C.ink, true, 23));
+        const error = this.text(modal, '调整不会推进随机流，已生成的候选不会改变。', 0, -252, 23, 584, C.muted, false, false, 78);
+        this.button(modal, '取消', -146, -355, 268, 82, () => { this.debugOpen = false; this.renderScreen(); }, C.pale, C.ink, true, 25);
+        this.button(modal, '确认修改', 146, -355, 268, 82, () => {
+            const dewText = dew.string.trim(); const chanceText = chance.string.trim();
+            if (!/^\d+$/.test(dewText) || !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(chanceText)) {
+                error.string = '请输入灵露整数和有效的概率百分比。'; error.color = color(C.red); return;
+            }
+            const result = this.session.applyDebugSettings(Number(dewText), Number(chanceText) / 100);
+            if (result.ok === false) {
+                error.string = result.reason === 'INVALID_DEW' ? '灵露须为 0～1000000 的整数。'
+                    : result.reason === 'INVALID_CHANCE' ? '概率须在 0～100% 之间。' : '当前阶段不能修改，请先完成变异选择。';
+                error.color = color(C.red); return;
+            }
+            this.debugOpen = false; this.renderScreen();
+            if (!this.saveProblem) this.toast?.show('本局调试参数已保存', { tone: 'success' });
+        }, C.spore, C.white, true, 25);
     }
 
     private drawGuide(root: Node, id: GuideId): void {
@@ -356,20 +418,22 @@ export class MvpGame extends Component {
             this.inspectedPetId = occupant.id;
             this.selected = { kind: 'pet', id: occupant.id }; this.clearFeedback(); this.renderScreen(); return;
         }
+        if (this.selected.kind === 'none') return;
         if (this.session.paused) { this.feedback = '暂停期间不能召唤或搬迁，请先继续战斗'; return; }
         if (this.selected.kind === 'pet') this.handlePetAction(this.session.movePet(this.selected.id, slot), false);
         else if (this.selected.kind === 'cultivate') this.handleCultivation(slot);
         else this.toast?.show('点击随机召唤，让携带伙伴加入防线', { tone: 'info' });
     }
 
-    private handlePetAction(result: PetActionResult, summoned: boolean): void {
+    private handlePetAction(result: PetActionResult, summoned: boolean,
+        cost = this.selected.kind === 'cultivate' ? ECONOMY.cultivateCost : ECONOMY.summonCost): void {
         this.infoOpen = false;
         this.inspectedPetId = null;
         if (result.ok === false) {
             const messages: Record<ActionError, string> = {
                 WRONG_PHASE: '当前阶段不能放置宠物', PAUSED: '请先继续战斗', INVALID_SLOT: '请选择有效树桩',
                 INVALID_SPECIES: '未知宠物种类', SLOT_OCCUPIED: '树桩已被占用，请选择空位',
-                INSUFFICIENT_DEW: this.insufficientDewMessage(),
+                INSUFFICIENT_DEW: this.insufficientDewMessage(cost),
                 SLOT_LOCKED: '荒藤缠住了树桩，请先用铲子开垦', SLOT_OPEN: '这里已开垦，请选择荒藤树桩',
                 NO_FREE_SLOT: '没有可放置的空位，请先合成、放生或用铲子开垦',
                 NOT_CARRIED: '这只宠物未加入本局携带池',
@@ -378,6 +442,8 @@ export class MvpGame extends Component {
                 ROSTER_FULL: `本局最多持有 ${this.session.rosterLimit} 只伙伴，可用归林绳索放生`,
                 PET_NOT_FOUND: '宠物不存在，请重新选择', SAME_PET: '请选择另一只同种同星伙伴',
                 SPECIES_MISMATCH: '只有同种宠物才能合成', STAR_MISMATCH: '只有同星宠物才能合成', MAX_STARS: '已达 3 星上限',
+                NO_MUTATION_CREDIT: '主动蜕变次数不足，完成第 3/6 站各获得一次', STAR_TOO_LOW: '主动蜕变需要二星或三星伙伴',
+                INVALID_MUTATION_INDEX: '请选择有效的变异层', NO_NEW_MUTATION: '已拥有该宠物的全部变异，无需蜕变',
             };
             this.feedback = messages[result.reason];
             this.feedbackError = result.reason;
@@ -408,11 +474,11 @@ export class MvpGame extends Component {
         this.handleMergeResult(this.session.mergePets(sourceId, targetId));
     }
 
-    private handleMergeResult(result: MergeResult): void {
+    private handleMergeResult(result: MergeResult, inspect = true): void {
         if (result.ok === false) { this.handlePetAction(result, false); return; }
         this.mergeSourceId = null; this.reservesOpen = false; this.accumulator = 0;
-        this.selected = { kind: 'pet', id: result.pet.id }; this.inspectedPetId = result.pet.id;
-        this.infoOpen = true;
+        this.selected = { kind: 'pet', id: result.pet.id }; this.inspectedPetId = inspect ? result.pet.id : null;
+        this.infoOpen = inspect;
         this.clearFeedback(); this.renderScreen();
         if (!result.mutationRequired) this.toast?.show(`${PETS[result.pet.species].name}升至 ${result.pet.star} 星`, { tone: 'success' });
     }
@@ -428,13 +494,15 @@ export class MvpGame extends Component {
     private handleCultivation(slot: number): void {
         this.infoOpen = false;
         const result = this.session.cultivate(slot);
-        if (result.ok === false) { this.handlePetAction(result, false); return; }
+        this.clearToolSelection();
+        if (result.ok === false) { this.handlePetAction(result, false, ECONOMY.cultivateCost); return; }
         this.inspectedPetId = null; this.clearFeedback(); this.renderScreen();
         this.toast?.show(`开垦成功！荒藤已清除 · -${ECONOMY.cultivateCost} 灵露`, { tone: 'success' });
     }
 
     private releaseAtSlot(slot: number | null): void {
         const pet = this.session.pets.find(p => slot !== null && p.slot === slot);
+        this.clearToolSelection();
         if (!pet) { this.toast?.show('请将归林绳索用于场上宠物', { tone: 'warning' }); this.renderScreen(); return; }
         this.releasePet(pet.id);
     }
@@ -442,8 +510,9 @@ export class MvpGame extends Component {
     private releasePet(id: number): void {
         this.infoOpen = false;
         const result = this.session.releasePet(id);
+        this.clearToolSelection();
         if (result.ok === false) { this.handlePetAction(result, false); return; }
-        this.selected = { kind: 'carried', species: result.species };
+        this.selected = { kind: 'none' };
         this.inspectedPetId = null; this.inspectedEnemyId = null;
         this.clearFeedback(); this.renderScreen();
         this.toast?.show(`${PETS[result.species].name}已归林 · +${result.refund} 灵露`, { tone: 'success' });
@@ -451,6 +520,11 @@ export class MvpGame extends Component {
 
     private overRope(point: { x: number; y: number }): boolean {
         return Math.abs(point.x - 280) <= 36 && Math.abs(point.y - (this.layout.bottom + 164)) <= 53;
+    }
+
+    private clearToolSelection(): void {
+        if (this.selected.kind === 'cultivate' || this.selected.kind === 'release') this.selected = { kind: 'none' };
+        this.infoOpen = false;
     }
 
     private touchPoint(event: EventTouch): { x: number; y: number } | null {
@@ -468,32 +542,43 @@ export class MvpGame extends Component {
         if (touchId === null || !point) return;
         const pet = selection?.kind === 'pet' ? this.session.pets.find(p => p.id === selection.id) : undefined;
         const species = selection?.kind === 'carried' ? selection.species : pet?.species ?? 'cat';
+        const toggleToolOnTap = (selection?.kind === 'release' || selection?.kind === 'cultivate') && this.selected.kind === selection.kind;
         if (selection) this.selected = selection;
-        this.infoOpen = !!selection;
+        // A press may become a drag: only a completed pet tap opens inspection.
+        this.infoOpen = false;
         if (selection?.kind === 'carried' || selection?.kind === 'release' || selection?.kind === 'cultivate') this.mergeSourceId = null;
         this.inspectedEnemyId = null;
-        this.inspectedPetId = selection?.kind === 'pet' ? selection.id : null;
+        this.inspectedPetId = null;
         // Keep the source alive: range and data labels update without rebuilding its touch node.
         this.summonDrag = { touchId, species, selection, originSlot: slot,
-            start: point, point, moved: false, elapsed: 0, active: false, startedAt: this.gestureTime() };
+            start: point, point, moved: false, elapsed: 0, active: false, startedAt: this.gestureTime(), releaseOnTap: false, toggleToolOnTap };
         this.clearFeedback();
     }
 
     private startBoardGesture(event: EventTouch): void {
+        if (this.summonDrag || this.orientationBlocked || this.reservesOpen) return;
         const point = this.touchPoint(event); if (!point) return;
-        if (this.mergeSourceId !== null) { this.startGesture(null, portraitSlotAt(point, this.layout), event); return; }
+        const slot = portraitSlotAt(point, this.layout);
+        if (this.mergeSourceId !== null) { this.startGesture(null, slot, event); return; }
+        const pet = this.session.pets.find(p => p.slot !== null && p.slot === slot);
+        if (pet) {
+            // The object under the finger owns the drag, even while a tool is selected.
+            // Keep rope tap-to-release separate from holding and dragging this pet.
+            const releaseOnTap = this.selected.kind === 'release';
+            this.startGesture({ kind: 'pet', id: pet.id }, slot, event);
+            if (this.summonDrag) this.summonDrag.releaseOnTap = releaseOnTap;
+            return;
+        }
         if (this.selected.kind === 'release' || this.selected.kind === 'cultivate') {
-            this.startGesture(this.selected, portraitSlotAt(point, this.layout), event); return;
+            this.startGesture(this.selected, slot, event); return;
         }
         const enemy = this.session.enemies.find(e => {
             const p = this.boardPoint(e); return Math.hypot(point.x - p.x, point.y - p.y) <= ENEMIES[e.kind].radius + 8;
         });
         if (enemy) { this.inspectedEnemyId = enemy.id; this.inspectedPetId = null; this.infoOpen = true; return; }
         this.inspectedEnemyId = null;
-        const slot = portraitSlotAt(point, this.layout);
         if (slot === null) { this.inspectedPetId = null; this.infoOpen = false; return; }
-        const pet = this.session.pets.find(p => p.slot === slot);
-        this.startGesture(pet ? { kind: 'pet', id: pet.id } : null, slot, event);
+        this.startGesture(null, slot, event);
     }
 
     // This clock measures a UI hold only; combat, income and cooldowns remain fixed-step.
@@ -517,11 +602,19 @@ export class MvpGame extends Component {
         if (!drag || event.getID() !== drag.touchId) return;
         // An outside release is node CANCEL in 3.8.8; inspect the original event code.
         if (event.getEventCode() !== Input.EventType.TOUCH_END) {
+            this.clearToolSelection();
             this.summonDrag = null; this.inspectedPetId = null; this.infoOpen = false; this.clearFeedback(); return;
         }
         this.moveSummonDrag(event); this.summonDrag = null;
         if (drag.moved) { this.inspectedPetId = null; this.infoOpen = false; }
+        if (drag.moved && (drag.selection?.kind === 'cultivate' || drag.selection?.kind === 'release')) this.clearToolSelection();
         if (this.orientationBlocked || this.reservesOpen) return;
+        if (drag.releaseOnTap && !drag.moved && drag.elapsed < 0.3 && drag.originSlot !== null) {
+            this.releaseAtSlot(drag.originSlot); return;
+        }
+        if (drag.selection?.kind === 'pet' && !drag.moved && drag.elapsed < 0.3) {
+            this.inspectedPetId = drag.selection.id; this.infoOpen = true; this.renderScreen(); return;
+        }
         if (!drag.selection) {
             if (!drag.moved && drag.originSlot !== null) this.handleSlot(drag.originSlot);
             return;
@@ -531,7 +624,14 @@ export class MvpGame extends Component {
                 if (drag.selection.kind === 'release') this.releaseAtSlot(drag.originSlot);
                 else this.handleCultivation(drag.originSlot);
             }
-            else this.renderScreen();
+            else {
+                // Tap an armed toolbar icon again, or empty ground, to dismiss it without a panel.
+                const toolbarTap = drag.selection.kind === 'cultivate'
+                    ? Math.abs(drag.start.x - 200) <= 36 && Math.abs(drag.start.y - (this.layout.bottom + 164)) <= 53
+                    : this.overRope(drag.start);
+                if (drag.toggleToolOnTap || !toolbarTap) this.clearToolSelection();
+                this.renderScreen();
+            }
             return;
         }
         if (!drag.active || !drag.moved || this.session.paused) {
@@ -548,7 +648,7 @@ export class MvpGame extends Component {
         const occupant = this.session.pets.find(p => p.slot === slot);
         if (drag.selection.kind === 'pet') {
             const result = this.session.dropPet(drag.selection.id, slot);
-            if (result.ok && 'mutationRequired' in result) this.handleMergeResult(result);
+            if (result.ok && 'mutationRequired' in result) this.handleMergeResult(result, false);
             else this.handlePetAction(result, false);
             return;
         }
@@ -559,7 +659,7 @@ export class MvpGame extends Component {
     }
 
     private canDrag(drag: SummonDrag): boolean {
-        return !!drag.selection && !this.session.paused && drag.selection.kind !== 'carried'
+        return !!drag.selection && !this.session.paused && drag.selection.kind !== 'carried' && drag.selection.kind !== 'none'
             && (drag.selection.kind !== 'cultivate' || this.session.dew >= ECONOMY.cultivateCost);
     }
 
@@ -621,6 +721,8 @@ export class MvpGame extends Component {
     }
 
     private onViewportResize(): void {
+        this.clearToolSelection();
+        this.metamorphosisOpen = false; this.metamorphosisTarget = null;
         this.infoOpen = false;
         this.mergeSourceId = null;
         this.toast?.dismiss();
@@ -672,6 +774,9 @@ export class MvpGame extends Component {
 
     private renderScreen(): void {
         this.guideActive = null;
+        // Paused runs resume through the menu now that the HUD has no pause control.
+        if (!this.atHome && !this.orientationBlocked && this.session.paused
+            && (this.session.phase === 'prepare' || this.session.phase === 'battle')) this.menuOpen = true;
         if (!this.atHome && !this.saveProblem) this.checkpoint();
         this.shovelMask = null; this.randomMask = null; this.starLabels.clear(); this.infoMergeButton = null; this.enemyLabels.clear(); this.bossStatus = null;
         if (this.reservesOpen || this.orientationBlocked
@@ -697,12 +802,14 @@ export class MvpGame extends Component {
         else if (this.session.phase === 'rest') this.drawRest(root, g);
         else if (this.session.phase === 'sanctuary') this.drawSanctuary(root, g);
         else this.drawBattle(root, g);
-        if (this.menuOpen) this.drawRunMenu(root);
-        else if (!this.saveProblem) {
+        if (this.session.phase === 'complete') this.expeditionOverlay(root);
+        if (this.menuOpen) { if (this.debugOpen) this.drawDebugModifier(root); else this.drawRunMenu(root); }
+        else if (!this.saveProblem && !this.metamorphosisOpen && !this.collectionOpen) {
             const tool = this.selected.kind === 'cultivate' || this.selected.kind === 'release' ? this.selected.kind : null;
             this.guideActive = nextGuide(this.session, this.profile.guideSeen, tool);
             if (this.guideActive) this.drawGuide(root, this.guideActive);
         }
+        if (this.collectionOpen) this.collectionOverlay(root);
         if (this.saveProblem) this.drawSaveFailure(root);
     }
 
@@ -857,11 +964,12 @@ export class MvpGame extends Component {
         this.deploymentLabel = this.text(root, '', 0, bottom + 238, 20, 640, C.ink, false, false, 30);
         this.bossStatus = this.text(root, '', 120, this.layout.arenaTop - 30, 22, 400, C.red, false, true, 36);
         this.bossStatus.node.active = false;
-        const random = this.button(root, `随机召唤\n${ECONOMY.summonCost} 灵露`, -206, bottom + 52, 232, 84,
+        const summonWidth = session.phase === 'prepare' ? 232 : 400;
+        const random = this.button(root, `随机召唤\n${ECONOMY.summonCost} 灵露`, -322 + summonWidth / 2, bottom + 52, summonWidth, 84,
             () => this.randomSummon(), C.green, C.white, true, 24);
-        this.randomMask = this.affordabilityMask(random, 'SummonShade', 232, 84, 16);
-        this.button(root, session.phase === 'prepare' ? '开始防守' : session.paused ? '继续' : '暂停',
-            0, bottom + 52, 160, 84, () => session.phase === 'prepare' ? this.begin() : this.togglePause(), C.pale, C.ink, true, 24);
+        this.randomMask = this.affordabilityMask(random, 'SummonShade', summonWidth, 84, 16);
+        if (session.phase === 'prepare') this.button(root, '开始防守',
+            0, bottom + 52, 160, 84, () => this.begin(), C.pale, C.ink, true, 24);
         this.button(root, `${this.speed}倍速`, 147, bottom + 52, 114, 84,
             () => { this.speed = this.speed === 1 ? 2 : 1; this.profile.speed = this.speed; this.renderScreen(); }, C.pale, C.ink, true, 22);
         const count = session.pets.filter(p => p.slot === null).length;
@@ -873,8 +981,13 @@ export class MvpGame extends Component {
         this.dynamic.node.setPosition(0, -arenaCenter);
         this.dragVisual = this.graphics(root, 'DragAvatar');
         this.drawInfoCard(root);
+        if (session.phase === 'prepare') this.button(root, `主动蜕变 ${session.mutationCredits}`, -222, this.layout.arenaTop - 32, 196, 52, () => {
+            this.metamorphosisOpen = true; this.metamorphosisTarget = null; this.infoOpen = false; this.mergeSourceId = null;
+            this.renderScreen();
+        }, session.mutationCredits > 0 ? C.spore : C.pale, session.mutationCredits > 0 ? C.white : C.ink, true, 22);
         if (session.phase === 'won' || session.phase === 'lost') this.resultOverlay(root);
         else if (session.phase === 'mutation') this.mutationOverlay(root);
+        else if (this.metamorphosisOpen && session.phase === 'prepare') this.metamorphosisOverlay(root);
         else if (this.reservesOpen) this.reserveOverlay(root);
     }
 
@@ -885,18 +998,92 @@ export class MvpGame extends Component {
         const modal = this.uiNode('MutationChoice', root); modal.addComponent(BlockInputEvents);
         const g = this.graphics(modal); g.fillColor = color(C.ink, 170);
         g.rect(-360, -this.layout.top, 720, this.layout.height); g.fill();
-        this.rect(g, 0, 0, 656, 760, C.bg, 22);
-        this.text(modal, '发生变异！', 0, 310, 38, 600, C.spore, false, true, 70);
-        this.text(modal, `${PETS[pet.species].name} · ${pet.star}星`, 0, 248, 28, 600, C.ink, false, true, 48);
-        this.text(modal, '选择一个特性 · 战斗已冻结', 0, 203, 23, 600, C.muted, false, false, 40);
-        mutationCards(pet.species).forEach((card, i) => {
-            const y = 76 - i * 220;
-            const button = this.button(modal, '', 0, y, 600, 180, () => this.chooseMutation(card.id), C.white, C.ink);
-            this.text(button, card.name, 0, 52, 30, 540, i === 0 ? C.orange : C.spore, false, true, 48);
-            this.text(button, card.detail, 0, -12, 23, 540, C.ink, false, false, 90);
-            this.text(button, i === 0 ? '属性取舍' : '特性共鸣', 0, -66, 20, 540, C.muted, false, false, 30);
+        this.rect(g, 0, 0, 656, 930, C.bg, 22);
+        this.text(modal, pending.source === 'metamorphosis' ? '主动蜕变' : '发生变异！', 0, 392, 38, 600, C.spore, false, true, 70);
+        this.text(modal, `${PETS[pet.species].name} · ${pet.star}星 · 变异 ${pet.mutations.length}/${PET_GROWTH.mutationsByStar[pet.star - 1]}`, 0, 330, 28, 600, C.ink, false, true, 48);
+        this.text(modal, `已保留：${mutationNames(pet.species, pet.mutations)}`, 0, 278, 22, 600, C.muted, false, false, 60);
+        pending.choices.forEach((id, i) => {
+            const card = mutationCards(pet.species).find(item => item.id === id);
+            if (!card) return;
+            const stats = this.session.petStats({ ...pet, mutations: mutationResult(pet.mutations, id, pending.replacementIndex) });
+            const fmt = (n: number): string => Number(n.toFixed(2)).toString();
+            const values = pet.species === 'deer' ? `范围 ${fmt(stats.range)} · 助威 +${fmt(stats.boost * 100)}%`
+                : pet.species === 'vine' ? `范围 ${fmt(stats.range)} · 间隔 ${fmt(stats.interval)} 秒`
+                : `伤害 ${fmt(stats.damage)} · 间隔 ${fmt(stats.interval)} 秒 · 范围 ${fmt(stats.range)}`;
+            const y = pending.choices.length === 1 ? 0 : 108 - i * 280;
+            const button = this.button(modal, '', 0, y, 600, 248, () => this.chooseMutation(card.id), C.white, C.ink);
+            this.text(button, `${pending.replacementIndex !== null && pet.mutations[pending.replacementIndex] === id ? '保留此层 · ' : pending.replacementIndex === null ? '新增 · ' : '替换此层 · '}${card.name}`, 0, 84, 30, 540, id === 'power' ? C.orange : C.spore, false, true, 48);
+            this.text(button, card.detail, 0, 13, 23, 540, C.ink, false, false, 94);
+            this.text(button, values, 0, -64, 21, 552, C.green, false, true, 46);
+            this.text(button, '基础属性 · 未计其他伙伴助威', 0, -103, 19, 540, C.muted, false, false, 30);
         });
-        this.text(modal, '选择后生效，替换已有变异；不会叠加或重抽。', 0, -306, 22, 600, C.muted, false, false, 70);
+        this.text(modal, pending.source === 'metamorphosis' ? '已消耗 1 次机会；有空位则新增，满槽调整一层。\n其他变异保留，候选不会重抽。'
+            : '已有变异全部保留，选择后新增一种。\n同名去重，三星最多三种；候选不会重抽。', 0, -389, 22, 600, C.muted, false, false, 84);
+    }
+
+    private metamorphosisOverlay(root: Node): void {
+        const s = this.session;
+        const modal = this.panel(root, 'MetamorphosisSelection', 980);
+        this.text(modal, `主动蜕变 · 剩余 ${s.mutationCredits} 次`, 0, 409, 34, 600, C.spore, false, true, 64);
+        this.text(modal, s.paused ? '请先从菜单继续远征，再使用蜕变。' : '完成第 3/6 站各得一次，可用于二星或三星。',
+            0, 340, 23, 592, C.muted, false, false, 74);
+        this.text(modal, '选择伙伴 · 包含后备', 0, 277, 24, 592, C.ink, false, true, 42);
+        s.pets.forEach((pet, i) => {
+            const selected = this.metamorphosisTarget === pet.id;
+            this.button(modal, `${PETS[pet.species].name} ${pet.star}星\n${pet.slot === null ? '后备' : '场上'} #${pet.id}`,
+                -222 + i % 4 * 148, 201 - Math.floor(i / 4) * 92, 138, 80,
+                () => { this.metamorphosisTarget = pet.id; this.metamorphosisLayer = 0; this.renderScreen(); }, selected ? C.spore : C.pale,
+                selected ? C.white : C.ink, pet.star >= 2, 20);
+        });
+        const pet = s.pets.find(p => p.id === this.metamorphosisTarget);
+        const form = pet ? mutationNames(pet.species, pet.mutations) : '';
+        if (pet && pet.mutations.length >= PET_GROWTH.mutationsByStar[pet.star - 1]) pet.mutations.forEach((id, index) => {
+            const name = mutationCards(pet.species).find(card => card.id === id)?.name ?? id;
+            this.button(modal, `第${index + 1}层·${name}`, -184 + index * 184, -205, 172, 54, () => { this.metamorphosisLayer = index; this.renderScreen(); },
+                this.metamorphosisLayer === index ? C.spore : C.pale, this.metamorphosisLayer === index ? C.white : C.ink, true, 20);
+        });
+        this.text(modal, pet ? `${PETS[pet.species].name} #${pet.id} · ${form}` : s.pets.some(p => p.star >= 2)
+            ? '请选择一只二星或三星伙伴' : '先合成一只二星伙伴，机会可留到以后。', 0, -142, 23, 592, C.ink, false, true, 74);
+        this.text(modal, '确认消耗 1 次，不花灵露；有空位则新增。\n满槽只调整选定的一层，其他变异保留。\n全部变异已拥有时无需蜕变。',
+            0, -290, 23, 592, C.muted, false, false, 118);
+        this.button(modal, '返回准备', -150, -401, 280, 82, () => {
+            this.metamorphosisOpen = false; this.metamorphosisTarget = null; this.renderScreen();
+        }, C.pale, C.ink, true, 24);
+        this.button(modal, '确认蜕变 · 1 次', 150, -401, 280, 82, () => {
+            if (!pet) return;
+            const result = s.beginMetamorphosis(pet.id, this.metamorphosisLayer);
+            this.metamorphosisOpen = false; this.metamorphosisTarget = null;
+            if (!result.ok) this.handlePetAction(result, false);
+            else { this.clearFeedback(); this.renderScreen(); }
+        }, C.spore, C.white, !!pet && s.metamorphosisError(pet.id, this.metamorphosisLayer) === null, 24);
+    }
+
+    private collectionOverlay(root: Node): void {
+        const modal = this.panel(root, 'MutationCollection', 1050);
+        const collection = this.profile.mutationCollection ?? [];
+        this.text(modal, `形态记录 · ${collection.length}/${MUTATION_FORM_COUNT}`, 0, 445, 36, 600, C.spore, false, true, 68);
+        this.text(modal, '实际参与战斗并守住该场后收录；新远征保留。', 0, 375, 22, 592, C.muted, false, false, 64);
+        PET_ORDER.forEach((species, i) => {
+            const y = 278 - i * 92;
+            this.text(modal, PETS[species].name, -186, y, 24, 188, this.petTint(species), false, true, 40);
+            const names = mutationCards(species).map(card => `${collection.some(form => form.species === species && form.mutation === card.id) ? '已用' : '未用'} ${card.name}`);
+            this.text(modal, names.join(' / '), 96, y, 21, 366, C.ink, true, false, 76);
+        });
+        const last = this.profile.lastExpedition;
+        this.text(modal, last ? `上次远征${last.debugModified ? '（调试）' : ''}：${last.outcome === 'won' ? '抵达净土' : '树心耗尽'} · 完成 ${last.nodes} 站\n使用并守住战斗的形态 ${last.forms.length} 种`
+            : '完成远征后，这里会留下最近一局的结果。', 0, -321, 23, 584, C.muted, false, false, 90);
+        this.button(modal, '返回', 0, -443, 560, 80, () => { this.collectionOpen = false; this.renderScreen(); }, C.green, C.white, true, 25);
+    }
+
+    private expeditionOverlay(root: Node): void {
+        const modal = this.panel(root, 'ExpeditionComplete', 760);
+        this.text(modal, '抵达净土', 0, 281, 40, 592, C.green, false, true, 80);
+        this.text(modal, `完成 ${this.session.visited.length} 站 · 树心 ${this.session.heart}/3`, 0, 197, 27, 592, C.ink, false, true, 50);
+        this.text(modal, `本局使用并守住战斗的形态 ${this.session.usedMutations.length} 种\n形态记录已保留，下局可以试试另一种搭配。`,
+            0, 83, 25, 584, C.muted, false, false, 110);
+        this.button(modal, '查看形态记录', 0, -44, 560, 80, () => { this.collectionOpen = true; this.renderScreen(); }, C.pale, C.ink, true, 24);
+        this.button(modal, '新远征', -146, -169, 268, 84, () => this.restart(), C.green, C.white, true, 25);
+        this.button(modal, '保存回首页', 146, -169, 268, 84, () => this.home(), C.pale, C.ink, true, 24);
     }
 
     private petCard(root: Node, id: PetId, x: number, y: number): void {
@@ -904,7 +1091,7 @@ export class MvpGame extends Component {
         const g = node.addComponent(Graphics);
         this.rect(g, 0, 0, 72, 106, C.white, 18);
         this.petIcon(g, 0, -3, id, 0.85);
-        // The carried pool is informational; it never buys or evolves a chosen species.
+        // Carried portraits only show the pool; tapping dismisses inspection without opening a card.
         node.on(Node.EventType.TOUCH_END, () => this.selectPet(id), this);
     }
 
@@ -973,7 +1160,6 @@ export class MvpGame extends Component {
         this.button(panel, '×', 280, 82, 60, 52, () => { this.infoOpen = false; this.inspectedEnemyId = null; }, C.pale, C.ink, true, 30);
         const action = this.button(panel, '收回', 140, -86, 116, 50, () => {
             this.mergeSourceId = null;
-            if (this.selected.kind === 'release' || this.selected.kind === 'cultivate') { this.selected = { kind: 'carried', species: 'cat' }; this.renderScreen(); return; }
             if (this.inspectedEnemyId !== null || this.selected.kind !== 'pet') return;
             const pet = this.session.pets.find(p => p.id === this.selectedPetId());
             if (!pet) return;
@@ -1038,17 +1224,18 @@ export class MvpGame extends Component {
         }
         const enemy = this.session.enemies.find(e => e.id === this.inspectedEnemyId);
         if (this.inspectedEnemyId !== null && !enemy) this.infoOpen = false;
-        if (this.infoRoot) this.infoRoot.active = this.infoOpen && !this.summonDrag?.active
+        const inspectable = !!enemy || !!pet;
+        if (this.infoRoot) this.infoRoot.active = this.infoOpen && !this.summonDrag && inspectable
             && !this.reservesOpen && (phase === 'prepare' || phase === 'battle');
         const actionNode = this.infoAction?.node.parent;
-        if (actionNode) actionNode.active = !enemy && selected.kind !== 'carried';
+        if (actionNode) actionNode.active = !enemy && selected.kind === 'pet';
         if (enemy) {
             const spec = ENEMIES[enemy.kind]; const rage = enemy.kind === 'boss' && enemy.hp <= enemy.maxHp * 0.5;
             const values: [Label | null, string][] = [
                 [this.infoTitle, `${spec.name} · ${enemy.kind === 'boss' ? 'BOSS' : enemy.kind === 'elite' ? '精英' : '雾兽'}`],
                 [this.infoStats, `生命 ${Math.ceil(enemy.hp)} / ${enemy.maxHp} · 移速 ${Math.round(this.session.current.speed * spec.speed * (rage ? ENEMY_BALANCE.bossRageSpeed : 1))}`],
                 [this.infoEffect, rage ? '狂暴中！移速提升 25%' : spec.trait],
-                [this.infoMeta, `击败 +${spec.reward} 灵露 · 点击头像切回伙伴资料`], [this.infoAction, '敌人'],
+                [this.infoMeta, `击败 +${spec.reward} 灵露 · 点击场上伙伴查看资料`], [this.infoAction, '敌人'],
             ];
             for (const [label, value] of values) if (label && label.string !== value) label.string = value;
             if (this.infoTitle) this.infoTitle.color = color(spec.tint);
@@ -1056,21 +1243,8 @@ export class MvpGame extends Component {
             return;
         }
         this.inspectedEnemyId = null;
-        if (selected.kind === 'release' || selected.kind === 'cultivate') {
-            const release = selected.kind === 'release';
-            const values: [Label | null, string][] = [
-                [this.infoTitle, release ? '归林绳索 · 放生' : '林地铲 · 开垦'],
-                [this.infoStats, release ? '返还原召唤消耗的 60% 灵露' : `${ECONOMY.cultivateCost} 灵露 · 解锁一个荒藤树桩`],
-                [this.infoEffect, release ? '拖到宠物身上，或选绳索再点宠物' : '清除荒藤后开放树桩，不占用召唤池'],
-                [this.infoMeta, release ? '1星伙伴返18 · 合成后按总投入返还' : '开垦在本次远征内保留 · 每次收费'],
-                [this.infoAction, '退出工具'],
-            ];
-            if (this.infoTitle) this.infoTitle.color = color(release ? C.orange : C.tool);
-            if (this.infoStats) this.infoStats.color = color(C.ink);
-            for (const [label, value] of values) if (label && label.string !== value) label.string = value;
-            return;
-        }
-        const species = pet?.species ?? (selected.kind === 'carried' ? selected.species : 'cat');
+        if (!pet) return;
+        const species = pet.species;
         const spec = PETS[species]; const base = pet ? this.session.petStats(pet) : spec;
         const damage = pet ? this.session.effectiveDamage(pet) : spec.damage;
         const range = pet ? this.session.attackRange(pet) : spec.range;
@@ -1086,10 +1260,8 @@ export class MvpGame extends Component {
             : species === 'deer' ? '范围内友军获得增益，同类光环不叠加'
             : species === 'mushroom' ? '孢子只伤害范围内敌人，离开范围即停止'
                 : species === 'cat' ? '挥爪攻击最接近摇篮树的单个敌人' : '发射星弹，追踪范围内最靠前的敌人';
-        const mutation = pet?.mutation ? mutationCards(pet.species).find(card => card.id === pet.mutation) : undefined;
-        if (mutation) effect = `${mutation.name} · ${mutation.summary}`;
-        const meta = pet ? `${pet.slot === null ? '后备' : '已部署'} #${pet.id} · 搬迁 / 放生 +${Math.floor(pet.purchaseCost * ECONOMY.releaseRate)} 灵露`
-            : `已携带 · 由随机召唤按钮抽取 · 每次 ${ECONOMY.summonCost} 灵露`;
+        if (pet?.mutations.length) effect = mutationNames(pet.species, pet.mutations);
+        const meta = `${pet.slot === null ? '后备' : '已部署'} #${pet.id} · 搬迁 / 放生 +${Math.floor(pet.purchaseCost * ECONOMY.releaseRate)} 灵露`;
         if (this.infoTitle) this.infoTitle.color = color(this.petTint(species));
         if (this.infoStats) this.infoStats.color = color(boosted ? C.leaf : C.ink);
         const labels: [Label | null, string][] = [
@@ -1115,8 +1287,8 @@ export class MvpGame extends Component {
             }
             const tint = this.petTint(species); const range = pet ? this.session.attackRange(pet) : PETS[species].range;
             if (p && selected.kind === 'pet') {
-                g.fillColor = color(tint, 24); g.ellipse(p.x, p.y, range * this.layout.scale, range * this.layout.scaleY); g.fill();
-                g.strokeColor = color(tint, 150); g.lineWidth = 2; g.ellipse(p.x, p.y, range * this.layout.scale, range * this.layout.scaleY); g.stroke();
+                g.fillColor = color(tint, 24); g.circle(p.x, p.y, range * this.layout.scale); g.fill();
+                g.strokeColor = color(tint, 150); g.lineWidth = 2; g.circle(p.x, p.y, range * this.layout.scale); g.stroke();
             }
             if ((selected.kind === 'carried' || selected.kind === 'release' || selected.kind === 'cultivate') && this.dragVisual) {
                 const x = selected.kind === 'release' ? 280 : selected.kind === 'cultivate' ? 200 : -280 + s.carriedPets.indexOf(selected.species) * 80;
@@ -1160,6 +1332,15 @@ export class MvpGame extends Component {
         for (const pet of s.pets) {
             if (pet.slot === null) continue;
             const p = this.boardPoint(SLOTS[pet.slot]); this.petIcon(g, p.x, p.y + 4, pet.species, 0.95);
+            if (pet.species === 'cat' && pet.mutations.length) {
+                if (pet.mutations.includes('longarm')) {
+                    for (const side of [-1, 1]) this.line(g, p.x + side * 24, p.y - 7, p.x + side * 42, p.y + 7, C.orange, 5);
+                }
+                if (pet.mutations.includes('power')) {
+                    this.circle(g, p.x - 28, p.y - 10, 9, C.orange); this.circle(g, p.x + 28, p.y - 10, 9, C.orange);
+                }
+                if (pet.mutations.includes('resonance')) { g.strokeColor = color(C.spore); g.lineWidth = 3; g.circle(p.x, p.y + 4, 34); g.stroke(); }
+            }
             let badge = this.starLabels.get(pet.id);
             if (!badge) {
                 badge = this.text(g.node, '', 0, 0, 24, 40, C.ink, false, true, 36);
@@ -1168,7 +1349,7 @@ export class MvpGame extends Component {
             this.circle(g, p.x, p.y + 60, 15, C.white);
             badge.node.setPosition(p.x, p.y + 60);
             if (badge.string !== `${pet.star}`) badge.string = `${pet.star}`;
-            badge.color = color(pet.mutation ? C.spore : pet.star > 1 ? C.orange : C.green);
+            badge.color = color(pet.mutations.length ? C.spore : pet.star > 1 ? C.orange : C.green);
             if (this.mergeSourceId !== null && s.mergeError(pet.id, this.mergeSourceId) === null) {
                 g.strokeColor = color(C.orange); g.lineWidth = 4; g.circle(p.x, p.y, 36); g.stroke();
             }
@@ -1185,7 +1366,7 @@ export class MvpGame extends Component {
         }
         for (const mark of s.marks) {
             const p = this.boardPoint(mark.to);
-            if (mark.radius) { g.strokeColor = color(C.orange, 170); g.lineWidth = 3; g.ellipse(p.x, p.y, mark.radius * this.layout.scale, mark.radius * this.layout.scaleY); g.stroke(); }
+            if (mark.radius) { g.strokeColor = color(C.orange, 170); g.lineWidth = 3; g.circle(p.x, p.y, mark.radius * this.layout.scale); g.stroke(); }
             if (mark.kind === 'sparrow') {
                 const from = this.boardPoint(mark.from);
                 this.line(g, from.x, from.y, (from.x + p.x) / 2 + 8, (from.y + p.y) / 2 - 6, C.electric, 4);
@@ -1337,12 +1518,17 @@ export class MvpGame extends Component {
         const modal = this.uiNode('Result', root); modal.addComponent(BlockInputEvents);
         const shade = this.graphics(modal); shade.fillColor = color(C.ink, 145);
         shade.rect(-360, -this.layout.top, 720, this.layout.height); shade.fill();
-        this.rect(shade, 0, 0, 640, 440, C.white, 20);
-        this.text(modal, won ? '这一站，守住了。' : '树心耗尽了。', 0, 128, 36, 590, won ? C.green : C.red, false, true, 84);
+        this.rect(shade, 0, 0, 640, 620, C.white, 20);
+        this.text(modal, won ? '这一站，守住了。' : '树心耗尽了。', 0, 218, 36, 590, won ? C.green : C.red, false, true, 84);
         this.text(modal, won ? `击退 ${this.session.kills} 只 · 漏过 ${this.session.leaked} 只\n树心 ${this.session.heart}/${this.session.maxHeart} · 灵露 ${this.session.dew}`
-            : '雾兽突破防线，摇篮树失去生机。\n整理阵容，再次出发。', 0, 20, 26, 580, C.muted, false, false, 110);
+            : '雾兽突破防线，摇篮树失去生机。\n整理阵容，再次出发。', 0, 105, 26, 580, C.muted, false, false, 110);
+        const depth = this.session.current?.depth;
+        const reward = won && depth !== undefined && PET_GROWTH.metamorphosisRewardDepths.some(d => d === depth);
+        this.text(modal, reward ? `获得主动蜕变 1 次 · 剩余 ${this.session.mutationCredits} 次\n下次准备时，可用于二星或三星伙伴。`
+            : `本局已收录 ${this.session.usedMutations.length} 种形态\n形态记录随档案保留。`, 0, -21, 24, 580, reward ? C.spore : C.muted, false, false, 98);
+        this.button(modal, '查看形态记录', 0, -127, 560, 64, () => { this.collectionOpen = true; this.renderScreen(); }, C.pale, C.ink, true, 23);
         this.button(modal, won ? (this.session.current?.children.length ? '继续选择路线' : '抵达净土') : '重新选择路线',
-            0, -134, 560, 84, () => {
+            0, -235, 560, 84, () => {
                 if (won) { this.session.continueRoute(); this.mapCamera = null; this.reservesOpen = false; this.clearFeedback(); this.renderScreen(); }
                 else this.restart();
             });

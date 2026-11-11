@@ -15,8 +15,10 @@ export function developReferenceSquad(game: MvpSession, evolve = true): void {
     const merge = (source: number, target: number): void => {
         const result = game.mergePets(source, target);
         if (!result.ok) throw new Error(`Reference merge failed: ${result.reason}`);
-        if (game.pendingMutation)
-            game.chooseMutation(result.pet.species === 'rabbit' || result.pet.species === 'deer' ? 'resonance' : 'power');
+        if (game.pendingMutation) {
+            const preferred = result.pet.species === 'rabbit' || result.pet.species === 'deer' ? 'resonance' : 'power';
+            game.chooseMutation(game.pendingMutation.choices.includes(preferred) ? preferred : game.pendingMutation.choices[0]);
+        }
     };
     for (const plan of REFERENCE_SQUAD) if (!game.pets.some(p => p.slot === plan.slot)) {
         if (game.dew < 30) return;
